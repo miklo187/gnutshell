@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=gnative
+Comment=Rust shell on libmutter
+Exec=/usr/local/bin/gnative --wayland --display-server
+Type=Application
+DesktopNames=gnative;GNOME

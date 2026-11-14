@@ -1,0 +1,348 @@
+//! Hand-written FFI for the small slice of libmutter / Clutter / Cogl we use.
+//!
+//! Signatures are taken from /usr/include/mutter-51. libmutter has no stable
+//! ABI: re-check this file whenever the mutter API version (soname) changes.
+
+#![allow(non_camel_case_types, dead_code)]
+
+use glib_sys::{gboolean, GError, GSList, GType};
+use gobject_sys::{GObject, GObjectClass};
+use std::ffi::{c_char, c_double, c_float, c_int, c_uint};
+
+// ---------------------------------------------------------------- opaque types
+
+macro_rules! opaque {
+    ($($name:ident),* $(,)?) => {
+        $(#[repr(C)] pub struct $name { _p: [u8; 0] })*
+    };
+}
+
+opaque!(
+    MetaContext,
+    MetaDisplay,
+    MetaCompositor,
+    MetaBackend,
+    MetaWindow,
+    MetaWorkspace,
+    MetaWorkspaceManager,
+    MetaKeyBinding,
+    MetaCloseDialog,
+    MetaInhibitShortcutsDialog,
+    ClutterActor,
+    ClutterStage,
+    ClutterText,
+    ClutterGrab,
+    ClutterEvent,
+    MetaStartupNotification,
+    MetaLaunchContext,
+    ClutterContext,
+    ClutterBackend,
+    ClutterSeat,
+    ClutterVirtualInputDevice,
+    ClutterColorState,
+);
+
+/// MetaWindowActor is a ClutterActor subclass; we only ever pass it around.
+pub type MetaWindowActor = ClutterActor;
+
+// ---------------------------------------------------------------- plain structs
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MtkRectangle {
+    pub x: c_int,
+    pub y: c_int,
+    pub width: c_int,
+    pub height: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MetaStrut {
+    pub rect: MtkRectangle,
+    pub side: c_int, // MetaSide
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct CoglColor {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+    pub alpha: u8,
+}
+
+impl CoglColor {
+    pub const fn rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
+        Self { red, green, blue, alpha }
+    }
+}
+
+// ---------------------------------------------------------------- enums
+
+pub const META_SIDE_TOP: c_int = 1 << 2;
+pub const META_WINDOW_NORMAL: c_int = 0;
+pub const CLUTTER_EASE_OUT_QUAD: c_int = 3;
+pub const CLUTTER_EASE_OUT_CUBIC: c_int = 6;
+pub const META_TAB_LIST_NORMAL: c_int = 0;
+pub const PANGO_ELLIPSIZE_END: c_int = 3;
+pub const CLUTTER_KEYBOARD_DEVICE: c_int = 1;
+pub const CLUTTER_PAINT_FLAG_CLEAR: c_int = 1 << 2;
+/// COGL_PIXEL_FORMAT_BGRA_8888_PRE = 3 | A_BIT | PREMULT_BIT | BGR_BIT
+pub const COGL_PIXEL_FORMAT_BGRA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7) | (1 << 5);
+pub const CLUTTER_KEY_STATE_RELEASED: c_int = 0;
+pub const CLUTTER_KEY_STATE_PRESSED: c_int = 1;
+
+/// `void (*MetaKeyHandlerFunc) (MetaDisplay*, MetaWindow*, const ClutterEvent*,
+///                              MetaKeyBinding*, gpointer)`
+pub type MetaKeyHandlerFunc = Option<
+    unsafe extern "C" fn(
+        *mut MetaDisplay,
+        *mut MetaWindow,
+        *const ClutterEvent,
+        *mut MetaKeyBinding,
+        glib_sys::gpointer,
+    ),
+>;
+
+// ---------------------------------------------------------------- MetaPlugin
+
+/// `G_DECLARE_DERIVABLE_TYPE (MetaPlugin, ...)`: instance is just a GObject.
+#[repr(C)]
+pub struct MetaPlugin {
+    pub parent_instance: GObject,
+}
+
+type ActorFn = Option<unsafe extern "C" fn(*mut MetaPlugin, *mut MetaWindowActor)>;
+
+/// Must match `struct _MetaPluginClass` in meta/meta-plugin.h field-for-field.
+#[repr(C)]
+pub struct MetaPluginClass {
+    pub parent_class: GObjectClass,
+
+    pub start: Option<unsafe extern "C" fn(*mut MetaPlugin)>,
+    pub minimize: ActorFn,
+    pub unminimize: ActorFn,
+    pub size_changed: ActorFn,
+    pub size_change: Option<
+        unsafe extern "C" fn(
+            *mut MetaPlugin,
+            *mut MetaWindowActor,
+            c_int, // MetaSizeChange
+            *mut MtkRectangle,
+            *mut MtkRectangle,
+        ),
+    >,
+    pub map: ActorFn,
+    pub destroy: ActorFn,
+    pub switch_workspace:
+        Option<unsafe extern "C" fn(*mut MetaPlugin, c_int, c_int, c_int /* MetaMotionDirection */)>,
+    pub show_tile_preview:
+        Option<unsafe extern "C" fn(*mut MetaPlugin, *mut MetaWindow, *mut MtkRectangle, c_int)>,
+    pub hide_tile_preview: Option<unsafe extern "C" fn(*mut MetaPlugin)>,
+    pub show_window_menu:
+        Option<unsafe extern "C" fn(*mut MetaPlugin, *mut MetaWindow, c_int, c_int, c_int)>,
+    pub show_window_menu_for_rect:
+        Option<unsafe extern "C" fn(*mut MetaPlugin, *mut MetaWindow, c_int, *mut MtkRectangle)>,
+    pub kill_window_effects: ActorFn,
+    pub kill_switch_workspace: Option<unsafe extern "C" fn(*mut MetaPlugin)>,
+    pub keybinding_filter:
+        Option<unsafe extern "C" fn(*mut MetaPlugin, *mut MetaKeyBinding) -> gboolean>,
+    pub confirm_display_change: Option<unsafe extern "C" fn(*mut MetaPlugin)>,
+    pub create_close_dialog:
+        Option<unsafe extern "C" fn(*mut MetaPlugin, *mut MetaWindow) -> *mut MetaCloseDialog>,
+    pub create_inhibit_shortcuts_dialog: Option<
+        unsafe extern "C" fn(*mut MetaPlugin, *mut MetaWindow) -> *mut MetaInhibitShortcutsDialog,
+    >,
+    pub locate_pointer: Option<unsafe extern "C" fn(*mut MetaPlugin)>,
+}
+
+// ---------------------------------------------------------------- functions
+
+unsafe extern "C" {
+    // glib-unix.h (not wrapped by the glib crate)
+    pub fn g_unix_signal_add(
+        signum: c_int,
+        handler: glib_sys::GSourceFunc,
+        user_data: glib_sys::gpointer,
+    ) -> c_uint;
+
+    // meta-context.h
+    pub fn meta_create_context(name: *const c_char) -> *mut MetaContext;
+    pub fn meta_context_destroy(ctx: *mut MetaContext);
+    pub fn meta_context_set_plugin_gtype(ctx: *mut MetaContext, gtype: GType);
+    pub fn meta_context_set_gnome_wm_keybindings(ctx: *mut MetaContext, wm: *const c_char);
+    pub fn meta_context_configure(
+        ctx: *mut MetaContext,
+        argc: *mut c_int,
+        argv: *mut *mut *mut c_char,
+        error: *mut *mut GError,
+    ) -> gboolean;
+    pub fn meta_context_setup(ctx: *mut MetaContext, error: *mut *mut GError) -> gboolean;
+    pub fn meta_context_start(ctx: *mut MetaContext, error: *mut *mut GError) -> gboolean;
+    pub fn meta_context_notify_ready(ctx: *mut MetaContext);
+    pub fn meta_context_run_main_loop(ctx: *mut MetaContext, error: *mut *mut GError) -> gboolean;
+    pub fn meta_context_terminate(ctx: *mut MetaContext);
+    pub fn meta_context_raise_rlimit_nofile(ctx: *mut MetaContext, error: *mut *mut GError)
+        -> gboolean;
+    pub fn meta_context_get_backend(ctx: *mut MetaContext) -> *mut MetaBackend;
+
+    // meta-backend.h
+    pub fn meta_backend_get_monitor_manager(backend: *mut MetaBackend) -> *mut GObject;
+
+    // meta-plugin.h
+    pub fn meta_plugin_get_type() -> GType;
+    pub fn meta_plugin_get_display(plugin: *mut MetaPlugin) -> *mut MetaDisplay;
+    pub fn meta_plugin_map_completed(plugin: *mut MetaPlugin, actor: *mut MetaWindowActor);
+    pub fn meta_plugin_destroy_completed(plugin: *mut MetaPlugin, actor: *mut MetaWindowActor);
+    pub fn meta_plugin_minimize_completed(plugin: *mut MetaPlugin, actor: *mut MetaWindowActor);
+    pub fn meta_plugin_unminimize_completed(plugin: *mut MetaPlugin, actor: *mut MetaWindowActor);
+
+    // display.h
+    pub fn meta_display_get_context(display: *mut MetaDisplay) -> *mut MetaContext;
+    pub fn meta_display_get_compositor(display: *mut MetaDisplay) -> *mut MetaCompositor;
+    pub fn meta_display_get_primary_monitor(display: *mut MetaDisplay) -> c_int;
+    pub fn meta_display_get_n_monitors(display: *mut MetaDisplay) -> c_int;
+    pub fn meta_display_get_monitor_geometry(
+        display: *mut MetaDisplay,
+        monitor: c_int,
+        geometry: *mut MtkRectangle,
+    );
+    pub fn meta_display_get_monitor_in_fullscreen(display: *mut MetaDisplay, monitor: c_int)
+        -> gboolean;
+    pub fn meta_display_get_workspace_manager(display: *mut MetaDisplay)
+        -> *mut MetaWorkspaceManager;
+
+    // compositor.h
+    pub fn meta_compositor_get_stage(compositor: *mut MetaCompositor) -> *mut ClutterStage;
+    pub fn meta_compositor_get_window_group(compositor: *mut MetaCompositor) -> *mut ClutterActor;
+
+    // meta-workspace-manager.h / workspace.h
+    pub fn meta_workspace_manager_get_n_workspaces(wm: *mut MetaWorkspaceManager) -> c_int;
+    pub fn meta_workspace_manager_get_workspace_by_index(
+        wm: *mut MetaWorkspaceManager,
+        index: c_int,
+    ) -> *mut MetaWorkspace;
+    pub fn meta_workspace_set_builtin_struts(ws: *mut MetaWorkspace, struts: *mut GSList);
+
+    // window.h / meta-window-actor.h
+    pub fn meta_window_actor_get_meta_window(actor: *mut MetaWindowActor) -> *mut MetaWindow;
+    pub fn meta_window_get_window_type(window: *mut MetaWindow) -> c_int;
+
+    // clutter-actor.h
+    pub fn clutter_actor_new() -> *mut ClutterActor;
+    pub fn clutter_actor_show(actor: *mut ClutterActor);
+    pub fn clutter_actor_destroy(actor: *mut ClutterActor);
+    pub fn clutter_actor_hide(actor: *mut ClutterActor);
+    pub fn clutter_actor_add_child(parent: *mut ClutterActor, child: *mut ClutterActor);
+    pub fn clutter_actor_insert_child_below(
+        parent: *mut ClutterActor,
+        child: *mut ClutterActor,
+        sibling: *mut ClutterActor,
+    );
+    pub fn clutter_actor_set_position(actor: *mut ClutterActor, x: c_float, y: c_float);
+    pub fn clutter_actor_set_size(actor: *mut ClutterActor, w: c_float, h: c_float);
+    pub fn clutter_actor_get_width(actor: *mut ClutterActor) -> c_float;
+    pub fn clutter_actor_get_height(actor: *mut ClutterActor) -> c_float;
+    pub fn clutter_actor_set_background_color(actor: *mut ClutterActor, color: *const CoglColor);
+    pub fn clutter_actor_set_opacity(actor: *mut ClutterActor, opacity: u8);
+    pub fn clutter_actor_set_pivot_point(actor: *mut ClutterActor, x: c_float, y: c_float);
+    pub fn clutter_actor_set_scale(actor: *mut ClutterActor, sx: c_double, sy: c_double);
+    pub fn clutter_actor_save_easing_state(actor: *mut ClutterActor);
+    pub fn clutter_actor_restore_easing_state(actor: *mut ClutterActor);
+    pub fn clutter_actor_set_easing_mode(actor: *mut ClutterActor, mode: c_int);
+    pub fn clutter_actor_set_easing_duration(actor: *mut ClutterActor, msecs: c_uint);
+    pub fn clutter_actor_remove_all_transitions(actor: *mut ClutterActor);
+    pub fn clutter_actor_get_transition(actor: *mut ClutterActor, name: *const c_char)
+        -> *mut GObject;
+    pub fn clutter_actor_set_width(actor: *mut ClutterActor, w: c_float);
+    pub fn clutter_actor_set_reactive(actor: *mut ClutterActor, reactive: gboolean);
+    pub fn clutter_actor_grab_key_focus(actor: *mut ClutterActor);
+    pub fn clutter_actor_destroy_all_children(actor: *mut ClutterActor);
+
+    // clutter-stage.h / clutter-grab.h
+    pub fn clutter_stage_grab(stage: *mut ClutterStage, actor: *mut ClutterActor) -> *mut ClutterGrab;
+    pub fn clutter_grab_dismiss(grab: *mut ClutterGrab);
+
+    // clutter-event.h
+    pub fn clutter_event_get_key_symbol(event: *const ClutterEvent) -> c_uint;
+
+    // pango/clutter-text.h
+    pub fn clutter_text_new_full(
+        font_name: *const c_char,
+        text: *const c_char,
+        color: *const CoglColor,
+    ) -> *mut ClutterActor;
+    pub fn clutter_text_set_text(text: *mut ClutterText, s: *const c_char);
+    pub fn clutter_text_get_text(text: *mut ClutterText) -> *const c_char;
+    pub fn clutter_text_set_editable(text: *mut ClutterText, editable: gboolean);
+    pub fn clutter_text_set_activatable(text: *mut ClutterText, activatable: gboolean);
+    pub fn clutter_text_set_single_line_mode(text: *mut ClutterText, single_line: gboolean);
+    pub fn clutter_text_set_cursor_color(text: *mut ClutterText, color: *const CoglColor);
+
+    // display.h / meta-startup-notification.h / meta-launch-context.h
+    pub fn meta_display_get_current_time_roundtrip(display: *mut MetaDisplay) -> u32;
+    pub fn meta_display_get_startup_notification(display: *mut MetaDisplay)
+        -> *mut MetaStartupNotification;
+    pub fn meta_startup_notification_create_launcher(sn: *mut MetaStartupNotification)
+        -> *mut MetaLaunchContext;
+    pub fn meta_launch_context_set_timestamp(ctx: *mut MetaLaunchContext, timestamp: u32);
+
+    // keybindings.h
+    pub fn meta_keybindings_set_custom_handler(
+        name: *const c_char,
+        handler: MetaKeyHandlerFunc,
+        user_data: glib_sys::gpointer,
+        free_data: glib_sys::GDestroyNotify,
+    ) -> gboolean;
+    pub fn meta_key_binding_is_reversed(binding: *mut MetaKeyBinding) -> gboolean;
+
+    // tab list / window activation
+    pub fn meta_display_get_tab_list(
+        display: *mut MetaDisplay,
+        list_type: c_int, // MetaTabList
+        workspace: *mut MetaWorkspace,
+    ) -> *mut glib_sys::GList;
+    pub fn meta_display_get_focus_window(display: *mut MetaDisplay) -> *mut MetaWindow;
+    pub fn meta_workspace_manager_get_active_workspace(wm: *mut MetaWorkspaceManager)
+        -> *mut MetaWorkspace;
+    pub fn meta_window_activate(window: *mut MetaWindow, timestamp: u32);
+    pub fn meta_window_get_title(window: *mut MetaWindow) -> *const c_char;
+    pub fn meta_window_get_wm_class(window: *mut MetaWindow) -> *const c_char;
+    pub fn meta_window_get_id(window: *mut MetaWindow) -> u64;
+    pub fn meta_window_get_frame_rect(window: *mut MetaWindow, rect: *mut MtkRectangle);
+    pub fn clutter_text_set_ellipsize(text: *mut ClutterText, mode: c_int);
+
+    // event time / seat / virtual input (debug hooks)
+    pub fn clutter_get_current_event_time() -> u32;
+    pub fn meta_compositor_get_window_actors(compositor: *mut MetaCompositor) -> *mut glib_sys::GList;
+    pub fn clutter_actor_is_visible(actor: *mut ClutterActor) -> gboolean;
+    pub fn clutter_actor_is_mapped(actor: *mut ClutterActor) -> gboolean;
+    pub fn clutter_actor_get_opacity(actor: *mut ClutterActor) -> u8;
+    pub fn clutter_actor_get_paint_opacity(actor: *mut ClutterActor) -> u8;
+    pub fn clutter_actor_get_parent(actor: *mut ClutterActor) -> *mut ClutterActor;
+    pub fn clutter_stage_paint_to_buffer(
+        stage: *mut ClutterStage,
+        rect: *const MtkRectangle,
+        scale: c_float,
+        data: *mut u8,
+        stride: c_int,
+        format: c_int, // CoglPixelFormat
+        color_state: *mut ClutterColorState,
+        paint_flags: c_int, // ClutterPaintFlag
+        error: *mut *mut GError,
+    ) -> gboolean;
+    pub fn clutter_actor_get_context(actor: *mut ClutterActor) -> *mut ClutterContext;
+    pub fn clutter_context_get_backend(ctx: *mut ClutterContext) -> *mut ClutterBackend;
+    pub fn clutter_backend_get_default_seat(backend: *mut ClutterBackend) -> *mut ClutterSeat;
+    pub fn clutter_seat_create_virtual_device(
+        seat: *mut ClutterSeat,
+        device_type: c_int, // ClutterInputDeviceType
+    ) -> *mut ClutterVirtualInputDevice;
+    pub fn clutter_virtual_input_device_notify_keyval(
+        dev: *mut ClutterVirtualInputDevice,
+        time_us: u64,
+        keyval: u32,
+        key_state: c_int, // ClutterKeyState
+    );
+}
