@@ -63,6 +63,18 @@ pub fn key_symbol(event: *const ffi::ClutterEvent) -> u32 {
     if event.is_null() { 0 } else { unsafe { ffi::clutter_event_get_key_symbol(event) } }
 }
 
+/// A text actor. Returned actor is floating until parented.
+pub unsafe fn label(font: &CStr, text: &str, color: &CoglColor) -> *mut ClutterActor {
+    let text = CString::new(text.replace('\0', "")).unwrap_or_default();
+    unsafe { ffi::clutter_text_new_full(font.as_ptr(), text.as_ptr(), color) }
+}
+
+/// Replace a text actor's text.
+pub unsafe fn set_text(actor: *mut ClutterActor, text: &str) {
+    let text = CString::new(text.replace('\0', "")).unwrap_or_default();
+    unsafe { ffi::clutter_text_set_text(actor as *mut ffi::ClutterText, text.as_ptr()) }
+}
+
 /// A list row: fixed size, optional highlight, left-aligned ellipsized label.
 /// Returned actor is floating; parent it before wrapping it with `gobj`.
 pub unsafe fn list_row(text: &str, width: f32, selected: bool) -> *mut ClutterActor {

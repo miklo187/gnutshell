@@ -27,9 +27,18 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   so a quick Alt+Tab just flips windows. This version lists windows, not apps
   grouped by window.
 
+- Polkit authentication agent: a modal "Authentication Required" dialog for
+  `pkexec`, software installs, system settings and similar. It drives
+  libpolkit-agent-1's `PolkitAgentSession`, which runs the setuid PAM helper.
+  The password goes from the entry straight to that helper and is never stored.
+  Supports retry after a wrong password, Escape/Cancel, multiple requests in a
+  queue, and cancellation from polkitd. The current user is preferred as the
+  identity when polkit offers it.
+
 ## Build
 
-Requires mutter 51 development files (`libmutter-51.pc`) and Rust.
+Requires mutter 51 development files (`libmutter-51.pc`), polkit
+(`polkit-agent-1.pc`) and Rust.
 
 ```sh
 cargo build --release
@@ -63,6 +72,24 @@ types the query, and launches the top match:
 GNATIVE_DEBUG_LAUNCH=console dbus-run-session -- ./target/debug/gnative --wayland --headless --virtual-monitor 1280x720
 ```
 
+**Polkit agent while nested.** Your gnome-shell already owns the agent for the
+login session, so a nested gnative registers only for one process. Start gnative
+from one terminal, then run `pkexec` from another:
+
+```sh
+# terminal A: note this shell's PID
+echo $$
+# terminal B
+GNATIVE_POLKIT_PID=<pid from A> dbus-run-session -- ./target/release/gnative --wayland --devkit
+# back in terminal A: the dialog appears inside gnative
+pkexec true
+```
+
+A headless test that never types a password: register for a test shell, run
+`pkcheck --action-id org.freedesktop.policykit.exec --process $$ --allow-user-interaction`,
+and send Escape with `GNATIVE_DEBUG_KEYS`. `pkcheck` exits with 3 (dismissed).
+Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
+
 **Switcher test** (debug builds only): `GNATIVE_DEBUG_SWITCH=<ms>` runs Alt+Tab on
 its own after the given number of milliseconds and logs the focused window before and
 after. Open at least two windows first.
@@ -90,6 +117,7 @@ All mutter options work (`--help`).
 | `src/plugin.rs` | `MetaPlugin` subclassing glue + the gnative shell |
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
+| `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
 | `src/ui.rs` | Shared colors, keysyms, Clutter helpers |
 | `src/ffi.rs` | Hand-written FFI for the libmutter / Clutter / Cogl subset in use |
 | `build.rs` | pkg-config linking + rpath for `/usr/lib/mutter-51` |
@@ -106,5 +134,6 @@ All mutter options work (`--help`).
   `GNATIVE_FULL_TEARDOWN=1` to run it anyway, for debugging.
 - **gnative doesn't implement the `org.gnome.Shell` D-Bus APIs.** Screenshot, OSD and
   some portal and gnome-settings-daemon features that depend on them won't work.
-- **No polkit or keyring agents and no lock screen yet.**
+- **No keyring prompt and no lock screen yet.** Keyring unlock prompts come from
+  gcr's system prompter, which gnome-shell normally replaces.
 - **The launcher shows no app icons yet.** It lists names only.

@@ -7,6 +7,7 @@
 mod ffi;
 mod launcher;
 mod plugin;
+mod polkit;
 mod switcher;
 mod ui;
 

@@ -40,6 +40,10 @@ opaque!(
     ClutterSeat,
     ClutterVirtualInputDevice,
     ClutterColorState,
+    PolkitSubject,
+    PolkitIdentity,
+    PolkitDetails,
+    PolkitAgentSession,
 );
 
 /// MetaWindowActor is a ClutterActor subclass; we only ever pass it around.
@@ -156,6 +160,46 @@ pub struct MetaPluginClass {
     >,
     pub locate_pointer: Option<unsafe extern "C" fn(*mut MetaPlugin)>,
 }
+
+// ---------------------------------------------------------------- PolkitAgentListener
+
+/// `struct _PolkitAgentListener`: just a GObject.
+#[repr(C)]
+pub struct PolkitAgentListener {
+    pub parent_instance: GObject,
+}
+
+/// Must match `struct _PolkitAgentListenerClass` in polkitagentlistener.h.
+#[repr(C)]
+pub struct PolkitAgentListenerClass {
+    pub parent_class: GObjectClass,
+    pub initiate_authentication: Option<
+        unsafe extern "C" fn(
+            *mut PolkitAgentListener,
+            *const c_char,          // action_id
+            *const c_char,          // message
+            *const c_char,          // icon_name
+            *mut PolkitDetails,
+            *const c_char,          // cookie
+            *mut glib_sys::GList,   // identities (PolkitIdentity*)
+            *mut gio::ffi::GCancellable,
+            gio::ffi::GAsyncReadyCallback,
+            glib_sys::gpointer,
+        ),
+    >,
+    pub initiate_authentication_finish: Option<
+        unsafe extern "C" fn(
+            *mut PolkitAgentListener,
+            *mut gio::ffi::GAsyncResult,
+            *mut *mut GError,
+        ) -> gboolean,
+    >,
+    pub _reserved: [Option<unsafe extern "C" fn()>; 8],
+}
+
+pub const POLKIT_ERROR_FAILED: c_int = 0;
+pub const POLKIT_ERROR_CANCELLED: c_int = 1;
+pub const POLKIT_AGENT_REGISTER_FLAGS_NONE: c_int = 0;
 
 // ---------------------------------------------------------------- functions
 
@@ -312,6 +356,43 @@ unsafe extern "C" {
     pub fn meta_window_get_id(window: *mut MetaWindow) -> u64;
     pub fn meta_window_get_frame_rect(window: *mut MetaWindow, rect: *mut MtkRectangle);
     pub fn clutter_text_set_ellipsize(text: *mut ClutterText, mode: c_int);
+    pub fn clutter_text_set_line_wrap(text: *mut ClutterText, wrap: gboolean);
+    pub fn clutter_text_set_password_char(text: *mut ClutterText, wc: u32);
+    pub fn clutter_text_get_editable(text: *mut ClutterText) -> gboolean;
+    pub fn clutter_text_set_cursor_visible(text: *mut ClutterText, visible: gboolean);
+
+    // polkit-agent-1 / polkit-gobject-1
+    pub fn polkit_agent_listener_get_type() -> GType;
+    pub fn polkit_agent_listener_register(
+        listener: *mut PolkitAgentListener,
+        flags: c_int,
+        subject: *mut PolkitSubject,
+        object_path: *const c_char,
+        cancellable: *mut gio::ffi::GCancellable,
+        error: *mut *mut GError,
+    ) -> glib_sys::gpointer;
+    pub fn polkit_agent_listener_unregister(handle: glib_sys::gpointer);
+    pub fn polkit_agent_session_new(
+        identity: *mut PolkitIdentity,
+        cookie: *const c_char,
+    ) -> *mut PolkitAgentSession;
+    pub fn polkit_agent_session_initiate(session: *mut PolkitAgentSession);
+    pub fn polkit_agent_session_response(session: *mut PolkitAgentSession, response: *const c_char);
+    pub fn polkit_agent_session_cancel(session: *mut PolkitAgentSession);
+    pub fn polkit_unix_session_new_for_process_sync(
+        pid: c_int,
+        cancellable: *mut gio::ffi::GCancellable,
+        error: *mut *mut GError,
+    ) -> *mut PolkitSubject;
+    pub fn polkit_unix_process_new_for_owner(pid: c_int, start_time: u64, uid: c_int)
+        -> *mut PolkitSubject;
+    pub fn polkit_unix_user_get_type() -> GType;
+    pub fn polkit_unix_user_get_uid(user: *mut PolkitIdentity) -> c_int;
+    pub fn polkit_unix_user_get_name(user: *mut PolkitIdentity) -> *const c_char;
+    pub fn polkit_error_quark() -> glib_sys::GQuark;
+
+    // libc
+    pub fn getuid() -> c_uint;
 
     // event time / seat / virtual input (debug hooks)
     pub fn clutter_get_current_event_time() -> u32;

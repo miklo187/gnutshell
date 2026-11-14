@@ -142,6 +142,7 @@ mod imp {
         pub(super) shell: RefCell<Option<Shell>>,
         pub(super) launcher: RefCell<Option<Rc<Launcher>>>,
         pub(super) switcher: RefCell<Option<Rc<Switcher>>>,
+        pub(super) polkit_agent: RefCell<Option<crate::polkit::Agent>>,
         pub(super) pending: RefCell<HashMap<usize, Pending>>,
     }
 
@@ -219,6 +220,7 @@ impl imp::GnativePlugin {
             *self.shell.borrow_mut() = Some(Shell { display, panel, clock, background });
             *self.launcher.borrow_mut() = Some(Launcher::new(display, stage));
             *self.switcher.borrow_mut() = Some(Switcher::new(display, stage));
+            *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
 
             self.connect_signals(display);
             self.update_clock();
@@ -527,6 +529,7 @@ impl imp::GnativePlugin {
         if let Some(switcher) = self.switcher.borrow_mut().take() {
             switcher.destroy();
         }
+        drop(self.polkit_agent.borrow_mut().take()); // unregisters
         let Some(shell) = self.shell.borrow_mut().take() else { return };
         unsafe {
             ffi::clutter_actor_destroy(shell.panel); // also destroys the clock
