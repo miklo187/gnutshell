@@ -263,6 +263,20 @@ impl Agent {
     }
 }
 
+impl Agent {
+    /// While locked, cancel the open prompt and hold queued requests; on
+    /// unlock, continue with the queue.
+    pub fn set_locked(&self, locked: bool) {
+        let dialog = self.listener.imp().dialog.borrow().clone();
+        let Some(dialog) = dialog else { return };
+        if locked {
+            dialog.cancel();
+        } else if dialog.state.borrow().active.is_none() {
+            dialog.start_next();
+        }
+    }
+}
+
 impl Drop for Agent {
     fn drop(&mut self) {
         unsafe { ffi::polkit_agent_listener_unregister(self.handle) };
@@ -409,6 +423,10 @@ impl AuthDialog {
     }
 
     fn start_next(self: &Rc<Self>) {
+        // Never show a password prompt over (or under) the lock screen.
+        if crate::lockscreen::is_locked() {
+            return;
+        }
         let Some(request) = self.state.borrow_mut().queue.pop_front() else { return };
 
         // polkitd may cancel the request (timeout, agent replaced, ...).

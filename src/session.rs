@@ -33,6 +33,7 @@ const LOGIND_MANAGER: &str = "org.freedesktop.login1.Manager";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    Lock,
     Suspend,
     Restart,
     PowerOff,
@@ -40,10 +41,11 @@ pub enum Action {
 }
 
 impl Action {
-    const ALL: [Action; 4] = [Action::Suspend, Action::Restart, Action::PowerOff, Action::LogOut];
+    const ALL: [Action; 5] = [Action::Lock, Action::Suspend, Action::Restart, Action::PowerOff, Action::LogOut];
 
     fn label(self) -> &'static str {
         match self {
+            Action::Lock => "Lock",
             Action::Suspend => "Suspend",
             Action::Restart => "Restart…",
             Action::PowerOff => "Power Off…",
@@ -53,6 +55,7 @@ impl Action {
 
     fn icon(self) -> &'static str {
         match self {
+            Action::Lock => "system-lock-screen-symbolic",
             Action::Suspend => "media-playback-pause-symbolic",
             Action::Restart => "system-reboot-symbolic",
             Action::PowerOff => "system-shutdown-symbolic",
@@ -64,7 +67,7 @@ impl Action {
     fn confirmation(self) -> Option<(&'static str, &'static str, &'static str)> {
         const BODY: &str = "Open apps will be closed. Unsaved work will be lost.";
         match self {
-            Action::Suspend => None,
+            Action::Lock | Action::Suspend => None,
             Action::Restart => Some(("Restart?", BODY, "Restart")),
             Action::PowerOff => Some(("Power Off?", BODY, "Power Off")),
             Action::LogOut => Some(("Log Out?", BODY, "Log Out")),
@@ -77,7 +80,7 @@ impl Action {
             Action::Suspend => Some(("Suspend", "CanSuspend")),
             Action::Restart => Some(("Reboot", "CanReboot")),
             Action::PowerOff => Some(("PowerOff", "CanPowerOff")),
-            Action::LogOut => None,
+            Action::Lock | Action::LogOut => None,
         }
     }
 }
@@ -112,7 +115,7 @@ struct State {
     rows: Vec<*mut ClutterActor>,
     selected: usize,
     /// Per action: does logind allow it? Log Out is always available.
-    available: [bool; 4],
+    available: [bool; 5],
     bus: Option<gio::DBusConnection>,
 }
 
@@ -172,7 +175,7 @@ impl SessionMenu {
                     items: Vec::new(),
                     rows: Vec::new(),
                     selected: 0,
-                    available: [false, false, false, true],
+                    available: [true, false, false, false, true],
                     bus: None,
                 }),
             })
@@ -479,6 +482,10 @@ impl SessionMenu {
 
     fn perform(&self, action: Action) {
         glib::g_message!("gnative", "session action: {action:?}");
+        if action == Action::Lock {
+            crate::lockscreen::lock_now();
+            return;
+        }
         let Some((method, _)) = action.logind() else {
             self.log_out();
             return;
@@ -635,9 +642,9 @@ mod tests {
     }
 
     #[test]
-    fn only_suspend_skips_confirmation() {
+    fn lock_and_suspend_skip_confirmation() {
         for a in Action::ALL {
-            assert_eq!(a.confirmation().is_none(), a == Action::Suspend);
+            assert_eq!(a.confirmation().is_none(), matches!(a, Action::Lock | Action::Suspend));
         }
     }
 }

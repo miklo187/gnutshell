@@ -42,6 +42,15 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   XKB layouts, Super+Space / Shift+Super+Space to switch, the active layout
   shown in the panel (click to switch). The last used layout is remembered in
   `mru-sources`, as in gnome-shell. IBus input methods are not supported yet.
+- Lock screen: Super+L (through gnome-settings-daemon and
+  `org.gnome.ScreenSaver.Lock`), "Lock" in the session menu, or
+  `loginctl lock-session`; also on idle and before suspend when
+  `org.gnome.desktop.screensaver lock-enabled` is on (after `lock-delay`).
+  The password is checked by PAM (service `gnative`, falling back to `login`)
+  on a worker thread. While locked, windows are hidden and unredirection is
+  off, every shortcut is blocked except VT switching, layout switching and
+  media keys that gsd allows on the lock screen, and polkit prompts wait.
+  logind's LockedHint and `ActiveChanged` are kept up to date.
 - App icons in the launcher and the switcher. Icons are looked up per the
   freedesktop icon theme spec: your `icon-theme` setting, its `Inherits`
   chain, `hicolor`, then `/usr/share/pixmaps`. They are rendered with
@@ -126,6 +135,8 @@ characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`,
 `Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `wheel-up` / `wheel-down`, and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
 
+`GNATIVE_DEBUG_PAM_USER=<user>` checks lock screen passwords against another
+(e.g. nonexistent) user, so test attempts never count against your account.
 `GNATIVE_DEBUG_SESSION_MENU=<ms>` opens the session menu. Only drive it toward
 Log Out in tests: the other entries really suspend, restart or power off.
 
@@ -148,6 +159,7 @@ This installs:
 - `/usr/local/bin/gnative`
 - `/usr/share/wayland-sessions/gnative.desktop` (runs `gnome-session --session=gnative`)
 - `/usr/share/gnome-session/sessions/gnative.session` (gnome-session refuses unknown sessions)
+- `/etc/pam.d/gnative` (lock screen password check, `auth include login`)
 - `/etc/systemd/user/gnative.service`
 - `/etc/systemd/user/gnome-session@gnative.target.d/session.conf`, which makes the
   session start gnative instead of gnome-shell, plus the usual session services
@@ -176,6 +188,8 @@ All mutter options work (`--help`).
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/osd.rs` | Volume/brightness popup |
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
+| `src/lockscreen.rs` | Lock screen, `org.gnome.ScreenSaver`, logind lock/sleep, idle |
+| `src/pam.rs` | PAM password check on a worker thread |
 | `src/session.rs` | Panel power button, session menu, logind actions |
 | `src/icons.rs` | Icon theme lookup, SVG/PNG loading, window-to-app matching |
 | `src/ui.rs` | Shared colors, keysyms, Clutter helpers |
@@ -200,7 +214,7 @@ All mutter options work (`--help`).
 - **Log Out doesn't ask apps to save first.** Under gnome-session it requests
   a forced logout (gnative has no end-session dialog for inhibitors yet);
   without gnome-session it just ends gnative.
-- **No keyring prompt and no lock screen yet.** Keyring unlock prompts come from
+- **No keyring prompt yet.** Keyring unlock prompts come from
   gcr's system prompter, which gnome-shell normally replaces.
 - **Icons support only SVG and PNG.** XPM files are skipped, and the generic
   fallback icon is shown instead.

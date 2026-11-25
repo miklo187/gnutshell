@@ -43,6 +43,8 @@ pub trait MetaPluginImpl: ObjectImpl + ObjectSubclass<Type: IsA<MetaPlugin>> {
     fn minimize(&self, actor: *mut ClutterActor);
     fn unminimize(&self, actor: *mut ClutterActor);
     fn kill_window_effects(&self, actor: *mut ClutterActor);
+    /// Return true to block `binding`.
+    fn keybinding_filter(&self, binding: *mut ffi::MetaKeyBinding) -> bool;
 }
 
 unsafe impl<T: MetaPluginImpl> IsSubclassable<T> for MetaPlugin {
@@ -55,6 +57,7 @@ unsafe impl<T: MetaPluginImpl> IsSubclassable<T> for MetaPlugin {
         klass.minimize = Some(vfunc_minimize::<T>);
         klass.unminimize = Some(vfunc_unminimize::<T>);
         klass.kill_window_effects = Some(vfunc_kill_window_effects::<T>);
+        klass.keybinding_filter = Some(vfunc_keybinding_filter::<T>);
     }
 }
 
@@ -86,6 +89,13 @@ unsafe extern "C" fn vfunc_kill_window_effects<T: MetaPluginImpl>(
     a: *mut ClutterActor,
 ) {
     unsafe { imp::<T>(p) }.kill_window_effects(a);
+}
+
+unsafe extern "C" fn vfunc_keybinding_filter<T: MetaPluginImpl>(
+    p: *mut ffi::MetaPlugin,
+    binding: *mut ffi::MetaKeyBinding,
+) -> glib_sys::gboolean {
+    unsafe { imp::<T>(p) }.keybinding_filter(binding).into_glib()
 }
 
 // =============================================================================
@@ -148,6 +158,7 @@ mod imp {
         pub(super) input_sources: RefCell<Option<std::rc::Rc<crate::keyboard::InputSources>>>,
         pub(super) osd: RefCell<Option<std::rc::Rc<crate::osd::Osd>>>,
         pub(super) shell_dbus: RefCell<Option<crate::shell_dbus::ShellService>>,
+        pub(super) lock_screen: RefCell<Option<std::rc::Rc<crate::lockscreen::LockScreen>>>,
         pub(super) pending: RefCell<HashMap<usize, Pending>>,
     }
 
@@ -184,6 +195,21 @@ mod imp {
         fn kill_window_effects(&self, actor: *mut ClutterActor) {
             self.finish(actor as usize, true);
         }
+
+        fn keybinding_filter(&self, binding: *mut ffi::MetaKeyBinding) -> bool {
+            if !crate::lockscreen::is_locked() {
+                return false;
+            }
+            let name = unsafe {
+                let p = ffi::meta_key_binding_get_name(binding);
+                if p.is_null() { String::new() } else { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
+            };
+            let blocked = !crate::lockscreen::allows_keybinding(&name);
+            if blocked {
+                glib::g_debug!("gnative", "locked: blocked keybinding {name}");
+            }
+            blocked
+        }
     }
 }
 
@@ -197,6 +223,25 @@ impl imp::GnativePlugin {
     }
 
     // ---------------------------------------------------------------- shell UI
+
+    /// The lock screen came up (`true`) or went away (`false`).
+    fn on_lock_changed(&self, locked: bool) {
+        if locked {
+            // These hold stage grabs of their own; close them first.
+            if let Some(l) = self.launcher.borrow().clone() {
+                l.hide();
+            }
+            if let Some(s) = self.switcher.borrow().clone() {
+                s.hide();
+            }
+            if let Some(m) = self.session_menu.borrow().clone() {
+                m.close();
+            }
+        }
+        if let Some(agent) = self.polkit_agent.borrow().as_ref() {
+            agent.set_locked(locked);
+        }
+    }
 
     fn build_shell(&self) {
         INSTANCE.with(|i| i.borrow().set(Some(&*self.obj())));
@@ -234,6 +279,17 @@ impl imp::GnativePlugin {
             let osd = crate::osd::Osd::new(display, stage);
             *self.shell_dbus.borrow_mut() = Some(crate::shell_dbus::ShellService::new(display, osd.clone()));
             *self.osd.borrow_mut() = Some(osd);
+            let weak = self.obj().downgrade();
+            let lock = crate::lockscreen::LockScreen::new(
+                display,
+                stage,
+                Box::new(move |locked| {
+                    if let Some(plugin) = weak.upgrade() {
+                        plugin.imp().on_lock_changed(locked);
+                    }
+                }),
+            );
+            *self.lock_screen.borrow_mut() = Some(lock);
 
             self.connect_signals(display);
             self.update_clock();
@@ -509,6 +565,9 @@ impl imp::GnativePlugin {
         // Super key: toggle the built-in launcher, or run $GNATIVE_LAUNCHER.
         let weak = self.obj().downgrade();
         display_obj.connect_local("overlay-key", false, move |_| {
+            if crate::lockscreen::is_locked() {
+                return None;
+            }
             if let Ok(cmd) = std::env::var("GNATIVE_LAUNCHER") {
                 if let Err(e) = glib::spawn_command_line_async(cmd.as_str()) {
                     glib::g_warning!("gnative", "failed to spawn launcher '{cmd}': {e}");
@@ -572,6 +631,9 @@ impl imp::GnativePlugin {
             if let Some(sources) = self.input_sources.borrow().as_ref() {
                 sources.place(geo.width as f32 - crate::session::BUTTON_SIZE - 8.0);
             }
+            if let Some(lock) = self.lock_screen.borrow().as_ref() {
+                lock.relayout();
+            }
 
             if ffi::meta_display_get_monitor_in_fullscreen(display, primary) != 0 {
                 ffi::clutter_actor_hide(shell.panel);
@@ -607,6 +669,9 @@ impl imp::GnativePlugin {
         }
         if let Some(switcher) = self.switcher.borrow_mut().take() {
             switcher.destroy();
+        }
+        if let Some(lock) = self.lock_screen.borrow_mut().take() {
+            lock.destroy();
         }
         drop(self.shell_dbus.borrow_mut().take()); // releases the bus name and grabs
         if let Some(osd) = self.osd.borrow_mut().take() {

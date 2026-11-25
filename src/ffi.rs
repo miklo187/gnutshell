@@ -286,6 +286,9 @@ unsafe extern "C" {
     // compositor.h
     pub fn meta_compositor_get_stage(compositor: *mut MetaCompositor) -> *mut ClutterStage;
     pub fn meta_compositor_get_window_group(compositor: *mut MetaCompositor) -> *mut ClutterActor;
+    pub fn meta_compositor_get_top_window_group(compositor: *mut MetaCompositor) -> *mut ClutterActor;
+    pub fn meta_compositor_disable_unredirect(compositor: *mut MetaCompositor);
+    pub fn meta_compositor_enable_unredirect(compositor: *mut MetaCompositor);
 
     // meta-workspace-manager.h / workspace.h
     pub fn meta_workspace_manager_get_n_workspaces(wm: *mut MetaWorkspaceManager) -> c_int;
@@ -378,6 +381,7 @@ unsafe extern "C" {
         free_data: glib_sys::GDestroyNotify,
     ) -> c_uint;
     pub fn meta_display_remove_keybinding(display: *mut MetaDisplay, name: *const c_char) -> gboolean;
+    pub fn meta_key_binding_get_name(binding: *mut MetaKeyBinding) -> *const c_char;
     pub fn meta_key_binding_is_reversed(binding: *mut MetaKeyBinding) -> gboolean;
 
     // tab list / window activation

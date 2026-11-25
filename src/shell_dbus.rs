@@ -32,8 +32,23 @@ const ALLOWED_CALLERS: [&str; 3] = [
     "org.freedesktop.impl.portal.desktop.gnome",
 ];
 
-/// gnome-shell's Shell.ActionMode.NORMAL, reported with activations.
+/// gnome-shell's Shell.ActionMode values, reported with activations and
+/// used by clients to say where an accelerator may fire.
 const ACTION_MODE_NORMAL: u32 = 1;
+const ACTION_MODE_LOCK_SCREEN: u32 = 1 << 2;
+
+thread_local! {
+    /// Accelerator actions whose owner allowed them on the lock screen.
+    static LOCK_SAFE: RefCell<std::collections::HashSet<u32>> = RefCell::default();
+}
+
+/// Whether keybinding `name` is an accelerator grabbed with the
+/// LOCK_SCREEN action mode (e.g. volume keys by gsd-media-keys).
+pub fn allowed_on_lock_screen(name: &str) -> bool {
+    name.strip_prefix("external-grab-")
+        .and_then(|n| n.parse::<u32>().ok())
+        .is_some_and(|action| LOCK_SAFE.with_borrow(|s| s.contains(&action)))
+}
 /// Meta.KeyBindingAction.NONE: grab failed.
 const ACTION_NONE: u32 = 0;
 
@@ -223,14 +238,14 @@ impl Inner {
         }
         match method {
             "GrabAccelerator" => {
-                let (accel, _mode, flags) = params.get::<(String, u32, u32)>().unwrap_or_default();
-                let action = self.grab(&accel, flags, sender);
+                let (accel, mode, flags) = params.get::<(String, u32, u32)>().unwrap_or_default();
+                let action = self.grab(&accel, mode, flags, sender);
                 invocation.return_value(Some(&(action,).to_variant()));
             }
             "GrabAccelerators" => {
                 let (list,) = params.get::<(Vec<(String, u32, u32)>,)>().unwrap_or_default();
                 let actions: Vec<u32> =
-                    list.iter().map(|(accel, _mode, flags)| self.grab(accel, *flags, sender)).collect();
+                    list.iter().map(|(accel, mode, flags)| self.grab(accel, *mode, *flags, sender)).collect();
                 invocation.return_value(Some(&(actions,).to_variant()));
             }
             "UngrabAccelerator" => {
@@ -284,7 +299,7 @@ impl Inner {
         })
     }
 
-    fn grab(self: &Rc<Self>, accelerator: &str, flags: u32, sender: &str) -> u32 {
+    fn grab(self: &Rc<Self>, accelerator: &str, mode: u32, flags: u32, sender: &str) -> u32 {
         let Ok(c) = std::ffi::CString::new(accelerator) else { return ACTION_NONE };
         let action = unsafe { ffi::meta_display_grab_accelerator(self.display, c.as_ptr(), flags) };
         if action == ACTION_NONE {
@@ -293,6 +308,13 @@ impl Inner {
         }
         glib::g_debug!("gnative", "grabbed {accelerator:?} as action {action} for {sender}");
         self.grabs.borrow_mut().insert(action, sender.to_owned());
+        LOCK_SAFE.with_borrow_mut(|s| {
+            if mode & ACTION_MODE_LOCK_SCREEN != 0 {
+                s.insert(action);
+            } else {
+                s.remove(&action);
+            }
+        });
         self.watch_grabber(sender);
         action
     }
@@ -302,6 +324,7 @@ impl Inner {
             return false;
         }
         self.grabs.borrow_mut().remove(&action);
+        LOCK_SAFE.with_borrow_mut(|s| s.remove(&action));
         unsafe { ffi::meta_display_ungrab_accelerator(self.display, action) != 0 }
     }
 
@@ -346,7 +369,8 @@ impl Inner {
 
         let params = glib::VariantDict::new(None);
         params.insert("timestamp", timestamp);
-        params.insert("action-mode", ACTION_MODE_NORMAL);
+        let mode = if crate::lockscreen::is_locked() { ACTION_MODE_LOCK_SCREEN } else { ACTION_MODE_NORMAL };
+        params.insert("action-mode", mode);
         if let Some(token) = self.activation_token(timestamp) {
             params.insert("activation-token", token);
         }
@@ -394,6 +418,7 @@ impl Inner {
         for action in actions {
             unsafe { ffi::meta_display_ungrab_accelerator(self.display, action) };
         }
+        LOCK_SAFE.with_borrow_mut(|s| s.clear());
         let display: glib::Object = unsafe { from_glib_none(self.display as *mut gobject_sys::GObject) };
         for id in self.display_handlers.borrow_mut().drain(..) {
             display.disconnect(id);
