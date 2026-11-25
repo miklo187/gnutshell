@@ -147,6 +147,7 @@ This installs:
 
 - `/usr/local/bin/gnative`
 - `/usr/share/wayland-sessions/gnative.desktop` (runs `gnome-session --session=gnative`)
+- `/usr/share/gnome-session/sessions/gnative.session` (gnome-session refuses unknown sessions)
 - `/etc/systemd/user/gnative.service`
 - `/etc/systemd/user/gnome-session@gnative.target.d/session.conf`, which makes the
   session start gnative instead of gnome-shell, plus the usual session services

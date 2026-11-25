@@ -582,6 +582,33 @@ impl SessionMenu {
     }
 }
 
+/// Tell GDM the session is up, as gnome-shell does: `RegisterSession` once
+/// the shell starts, `RegisterDisplay` once it has drawn. A session whose
+/// .desktop entry says `X-GDM-SessionRegisters=true` and never registers
+/// is treated by GDM as failed. Outside GDM the calls just fail quietly.
+pub fn register_with_gdm(method: &'static str) {
+    glib::g_message!("gnative", "{method} with GDM");
+    gio::bus_get(gio::BusType::System, gio::Cancellable::NONE, move |bus| {
+        let Ok(bus) = bus else { return };
+        bus.call(
+            Some("org.gnome.DisplayManager"),
+            "/org/gnome/DisplayManager/Manager",
+            "org.gnome.DisplayManager.Manager",
+            method,
+            None,
+            None,
+            gio::DBusCallFlags::NO_AUTO_START,
+            -1,
+            gio::Cancellable::NONE,
+            move |result| {
+                if let Err(e) = result {
+                    glib::g_debug!("gnative", "GDM {method} failed: {e}");
+                }
+            },
+        );
+    });
+}
+
 /// logind `Can*` answers: "yes" and "challenge" (needs authentication) are
 /// usable; "no" and "na" are not.
 fn is_available(answer: &str) -> bool {

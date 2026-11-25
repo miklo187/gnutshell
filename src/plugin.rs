@@ -242,6 +242,11 @@ impl imp::GnativePlugin {
             ffi::clutter_actor_show(stage);
         }
 
+        crate::session::register_with_gdm("RegisterSession");
+        // gnome-shell registers the display once startup is complete; the
+        // first idle after showing the stage is the closest equivalent.
+        glib::idle_add_local_once(|| crate::session::register_with_gdm("RegisterDisplay"));
+
         let weak = self.obj().downgrade();
         glib::timeout_add_seconds_local(1, move || match weak.upgrade() {
             Some(plugin) => {
