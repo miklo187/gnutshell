@@ -5,6 +5,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+# Run as your user: the build and `systemctl --user` must not run as root.
+# The script calls sudo itself for the system files.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Run dist/install.sh as your normal user, without sudo." >&2
+    exit 1
+fi
+
 BIN=/usr/local/bin/gnative
 SESSION=/usr/share/wayland-sessions/gnative.desktop
 GS_SESSION=/usr/share/gnome-session/sessions/gnative.session
