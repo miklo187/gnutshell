@@ -51,6 +51,14 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   off, every shortcut is blocked except VT switching, layout switching and
   media keys that gsd allows on the lock screen, and polkit prompts wait.
   logind's LockedHint and `ActiveChanged` are kept up to date.
+- Workspaces: a panel indicator on the left (one dot per workspace, the
+  active one wider; click a dot to switch, scroll over it to step), and a
+  slide animation when switching (Super+PageUp/PageDown, Ctrl+Alt+arrows and
+  the other mutter workspace shortcuts). With `org.gnome.mutter
+  dynamic-workspaces` on, workspaces are managed like in gnome-shell: always
+  one empty workspace at the end, at least two, empty ones in between are
+  removed, the active one is kept. With it off, mutter's fixed
+  `num-workspaces` applies.
 - App icons in the launcher and the switcher. Icons are looked up per the
   freedesktop icon theme spec: your `icon-theme` setting, its `Inherits`
   chain, `hicolor`, then `/usr/share/pixmaps`. They are rendered with
@@ -190,6 +198,7 @@ All mutter options work (`--help`).
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
 | `src/lockscreen.rs` | Lock screen, `org.gnome.ScreenSaver`, logind lock/sleep, idle |
 | `src/pam.rs` | PAM password check on a worker thread |
+| `src/workspaces.rs` | Workspace indicator, switch animation, dynamic workspaces |
 | `src/session.rs` | Panel power button, session menu, logind actions |
 | `src/icons.rs` | Icon theme lookup, SVG/PNG loading, window-to-app matching |
 | `src/ui.rs` | Shared colors, keysyms, Clutter helpers |

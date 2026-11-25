@@ -17,6 +17,7 @@ mod session;
 mod shell_dbus;
 mod switcher;
 mod ui;
+mod workspaces;
 
 use glib::prelude::*;
 use glib::translate::*;

@@ -296,6 +296,27 @@ unsafe extern "C" {
         wm: *mut MetaWorkspaceManager,
         index: c_int,
     ) -> *mut MetaWorkspace;
+    pub fn meta_workspace_manager_append_new_workspace(
+        wm: *mut MetaWorkspaceManager,
+        activate: gboolean,
+        timestamp: u32,
+    ) -> *mut MetaWorkspace;
+    pub fn meta_workspace_manager_remove_workspace(wm: *mut MetaWorkspaceManager, ws: *mut MetaWorkspace, timestamp: u32);
+    pub fn meta_workspace_manager_get_active_workspace_index(wm: *mut MetaWorkspaceManager) -> c_int;
+    pub fn meta_workspace_index(ws: *mut MetaWorkspace) -> c_int;
+    pub fn meta_workspace_activate(ws: *mut MetaWorkspace, timestamp: u32);
+    pub fn meta_window_get_workspace(window: *mut MetaWindow) -> *mut MetaWorkspace;
+    pub fn meta_window_is_on_all_workspaces(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_window_showing_on_its_workspace(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_plugin_switch_workspace_completed(plugin: *mut MetaPlugin);
+    pub fn clutter_clone_new(source: *mut ClutterActor) -> *mut ClutterActor;
+    pub fn clutter_actor_get_position(actor: *mut ClutterActor, x: *mut c_float, y: *mut c_float);
+    pub fn clutter_actor_set_x(actor: *mut ClutterActor, x: c_float);
+    pub fn clutter_actor_insert_child_above(
+        parent: *mut ClutterActor,
+        child: *mut ClutterActor,
+        sibling: *mut ClutterActor,
+    );
     pub fn meta_workspace_set_builtin_struts(ws: *mut MetaWorkspace, struts: *mut GSList);
 
     // window.h / meta-window-actor.h

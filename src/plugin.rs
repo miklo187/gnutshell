@@ -45,6 +45,9 @@ pub trait MetaPluginImpl: ObjectImpl + ObjectSubclass<Type: IsA<MetaPlugin>> {
     fn kill_window_effects(&self, actor: *mut ClutterActor);
     /// Return true to block `binding`.
     fn keybinding_filter(&self, binding: *mut ffi::MetaKeyBinding) -> bool;
+    /// Animate a workspace switch; call `meta_plugin_switch_workspace_completed` when done.
+    fn switch_workspace(&self, from: i32, to: i32);
+    fn kill_switch_workspace(&self);
 }
 
 unsafe impl<T: MetaPluginImpl> IsSubclassable<T> for MetaPlugin {
@@ -58,6 +61,8 @@ unsafe impl<T: MetaPluginImpl> IsSubclassable<T> for MetaPlugin {
         klass.unminimize = Some(vfunc_unminimize::<T>);
         klass.kill_window_effects = Some(vfunc_kill_window_effects::<T>);
         klass.keybinding_filter = Some(vfunc_keybinding_filter::<T>);
+        klass.switch_workspace = Some(vfunc_switch_workspace::<T>);
+        klass.kill_switch_workspace = Some(vfunc_kill_switch_workspace::<T>);
     }
 }
 
@@ -96,6 +101,19 @@ unsafe extern "C" fn vfunc_keybinding_filter<T: MetaPluginImpl>(
     binding: *mut ffi::MetaKeyBinding,
 ) -> glib_sys::gboolean {
     unsafe { imp::<T>(p) }.keybinding_filter(binding).into_glib()
+}
+
+unsafe extern "C" fn vfunc_switch_workspace<T: MetaPluginImpl>(
+    p: *mut ffi::MetaPlugin,
+    from: std::ffi::c_int,
+    to: std::ffi::c_int,
+    _direction: std::ffi::c_int,
+) {
+    unsafe { imp::<T>(p) }.switch_workspace(from, to);
+}
+
+unsafe extern "C" fn vfunc_kill_switch_workspace<T: MetaPluginImpl>(p: *mut ffi::MetaPlugin) {
+    unsafe { imp::<T>(p) }.kill_switch_workspace();
 }
 
 // =============================================================================
@@ -159,6 +177,8 @@ mod imp {
         pub(super) osd: RefCell<Option<std::rc::Rc<crate::osd::Osd>>>,
         pub(super) shell_dbus: RefCell<Option<crate::shell_dbus::ShellService>>,
         pub(super) lock_screen: RefCell<Option<std::rc::Rc<crate::lockscreen::LockScreen>>>,
+        pub(super) workspaces: RefCell<Option<std::rc::Rc<crate::workspaces::Workspaces>>>,
+        pub(super) switch_animation: RefCell<Option<std::rc::Rc<crate::workspaces::SwitchAnimation>>>,
         pub(super) pending: RefCell<HashMap<usize, Pending>>,
     }
 
@@ -194,6 +214,26 @@ mod imp {
 
         fn kill_window_effects(&self, actor: *mut ClutterActor) {
             self.finish(actor as usize, true);
+        }
+
+        fn switch_workspace(&self, from: i32, to: i32) {
+            // A new switch while one is running: end the old one first.
+            self.kill_switch_workspace();
+            let display = self.obj().upcast_ref::<MetaPlugin>().display();
+            let plugin = self.plugin_ptr() as usize;
+            let done: Box<dyn FnOnce()> =
+                Box::new(move || unsafe { ffi::meta_plugin_switch_workspace_completed(plugin as *mut ffi::MetaPlugin) });
+            match crate::workspaces::SwitchAnimation::start(display, from, to, done) {
+                Ok(anim) => *self.switch_animation.borrow_mut() = Some(anim),
+                Err(done) => done(),
+            }
+        }
+
+        fn kill_switch_workspace(&self) {
+            let anim = self.switch_animation.borrow_mut().take();
+            if let Some(anim) = anim {
+                anim.finish();
+            }
         }
 
         fn keybinding_filter(&self, binding: *mut ffi::MetaKeyBinding) -> bool {
@@ -290,6 +330,7 @@ impl imp::GnativePlugin {
                 }),
             );
             *self.lock_screen.borrow_mut() = Some(lock);
+            *self.workspaces.borrow_mut() = Some(crate::workspaces::Workspaces::new(display, panel));
 
             self.connect_signals(display);
             self.update_clock();
@@ -634,6 +675,9 @@ impl imp::GnativePlugin {
             if let Some(lock) = self.lock_screen.borrow().as_ref() {
                 lock.relayout();
             }
+            if let Some(ws) = self.workspaces.borrow().as_ref() {
+                ws.relayout();
+            }
 
             if ffi::meta_display_get_monitor_in_fullscreen(display, primary) != 0 {
                 ffi::clutter_actor_hide(shell.panel);
@@ -669,6 +713,12 @@ impl imp::GnativePlugin {
         }
         if let Some(switcher) = self.switcher.borrow_mut().take() {
             switcher.destroy();
+        }
+        if let Some(anim) = self.switch_animation.borrow_mut().take() {
+            anim.finish();
+        }
+        if let Some(ws) = self.workspaces.borrow_mut().take() {
+            ws.destroy();
         }
         if let Some(lock) = self.lock_screen.borrow_mut().take() {
             lock.destroy();
