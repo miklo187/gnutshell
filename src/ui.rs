@@ -92,6 +92,47 @@ pub fn key_symbol(event: *const ffi::ClutterEvent) -> u32 {
     if event.is_null() { 0 } else { unsafe { ffi::clutter_event_get_key_symbol(event) } }
 }
 
+/// Whole rows to scroll for a scroll event (positive = down). Smooth
+/// (touchpad / high-resolution wheel) deltas accumulate in `acc` until they
+/// add up to a row. Discrete events that Clutter emulates from smooth ones
+/// are skipped so a wheel notch doesn't count twice.
+pub fn scroll_rows(event: *const ffi::ClutterEvent, acc: &mut f64) -> i32 {
+    if event.is_null() || unsafe { ffi::clutter_event_is_pointer_emulated(event) } != 0 {
+        return 0;
+    }
+    match unsafe { ffi::clutter_event_get_scroll_direction(event) } {
+        ffi::CLUTTER_SCROLL_UP => -1,
+        ffi::CLUTTER_SCROLL_DOWN => 1,
+        ffi::CLUTTER_SCROLL_SMOOTH => {
+            let (mut dx, mut dy) = (0.0, 0.0);
+            unsafe { ffi::clutter_event_get_scroll_delta(event, &mut dx, &mut dy) };
+            accumulate_rows(acc, dy)
+        }
+        _ => 0,
+    }
+}
+
+/// Add `delta` rows to `acc` and take out the whole rows.
+pub fn accumulate_rows(acc: &mut f64, delta: f64) -> i32 {
+    *acc += delta;
+    let rows = acc.trunc();
+    *acc -= rows;
+    rows as i32
+}
+
+/// First visible index of a `max`-row window over `len` rows, moved just
+/// enough from `offset` to show `selected`.
+pub fn scroll_to_show(offset: usize, len: usize, max: usize, selected: usize) -> usize {
+    let offset = if selected < offset {
+        selected
+    } else if selected >= offset + max {
+        selected + 1 - max
+    } else {
+        offset
+    };
+    offset.min(len.saturating_sub(max))
+}
+
 /// A text actor. Returned actor is floating until parented.
 pub unsafe fn label(font: &CStr, text: &str, color: &CoglColor) -> *mut ClutterActor {
     let text = CString::new(text.replace('\0', "")).unwrap_or_default();
@@ -150,5 +191,28 @@ pub unsafe fn button(text: &str, width: f32, height: f32, color: &CoglColor) -> 
         let y = (height - ffi::clutter_actor_get_height(l)) / 2.0;
         ffi::clutter_actor_set_position(l, x.floor(), y.floor());
         b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{accumulate_rows, scroll_to_show};
+
+    #[test]
+    fn smooth_deltas_accumulate() {
+        let mut acc = 0.0;
+        assert_eq!(accumulate_rows(&mut acc, 0.4), 0);
+        assert_eq!(accumulate_rows(&mut acc, 0.4), 0);
+        assert_eq!(accumulate_rows(&mut acc, 0.4), 1);
+        assert_eq!(accumulate_rows(&mut acc, -2.5), -2);
+    }
+
+    #[test]
+    fn keeps_selection_visible() {
+        assert_eq!(scroll_to_show(0, 20, 8, 3), 0);
+        assert_eq!(scroll_to_show(0, 20, 8, 8), 1);
+        assert_eq!(scroll_to_show(5, 20, 8, 2), 2);
+        assert_eq!(scroll_to_show(0, 20, 8, 19), 12);
+        assert_eq!(scroll_to_show(10, 5, 8, 0), 0);
     }
 }

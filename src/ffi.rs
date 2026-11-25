@@ -107,7 +107,9 @@ pub const CLUTTER_EASE_OUT_QUAD: c_int = 3;
 pub const CLUTTER_EASE_OUT_CUBIC: c_int = 6;
 pub const META_TAB_LIST_NORMAL: c_int = 0;
 pub const PANGO_ELLIPSIZE_END: c_int = 3;
+pub const CLUTTER_POINTER_DEVICE: c_int = 0;
 pub const CLUTTER_KEYBOARD_DEVICE: c_int = 1;
+pub const CLUTTER_SCROLL_SOURCE_WHEEL: c_int = 1;
 pub const CLUTTER_PAINT_FLAG_CLEAR: c_int = 1 << 2;
 /// COGL_PIXEL_FORMAT_BGRA_8888_PRE = 3 | A_BIT | PREMULT_BIT | BGR_BIT
 pub const COGL_PIXEL_FORMAT_BGRA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7) | (1 << 5);
@@ -115,6 +117,9 @@ pub const CLUTTER_CONTENT_GRAVITY_RESIZE_ASPECT: c_int = 10;
 pub const CAIRO_FORMAT_ARGB32: c_int = 0;
 pub const CAIRO_STATUS_SUCCESS: c_int = 0;
 pub const META_KEY_BINDING_IS_REVERSED: c_uint = 1 << 2;
+pub const CLUTTER_SCROLL_UP: c_int = 0;
+pub const CLUTTER_SCROLL_DOWN: c_int = 1;
+pub const CLUTTER_SCROLL_SMOOTH: c_int = 4;
 pub const CLUTTER_KEY_STATE_RELEASED: c_int = 0;
 pub const CLUTTER_KEY_STATE_PRESSED: c_int = 1;
 
@@ -330,6 +335,9 @@ unsafe extern "C" {
     pub fn clutter_grab_dismiss(grab: *mut ClutterGrab);
 
     // clutter-event.h
+    pub fn clutter_event_get_scroll_direction(event: *const ClutterEvent) -> c_int;
+    pub fn clutter_event_get_scroll_delta(event: *const ClutterEvent, dx: *mut c_double, dy: *mut c_double);
+    pub fn clutter_event_is_pointer_emulated(event: *const ClutterEvent) -> gboolean;
     pub fn clutter_event_get_key_symbol(event: *const ClutterEvent) -> c_uint;
 
     // pango/clutter-text.h
@@ -452,6 +460,18 @@ unsafe extern "C" {
         seat: *mut ClutterSeat,
         device_type: c_int, // ClutterInputDeviceType
     ) -> *mut ClutterVirtualInputDevice;
+    pub fn clutter_virtual_input_device_notify_absolute_motion(
+        dev: *mut ClutterVirtualInputDevice,
+        time_us: u64,
+        x: c_double,
+        y: c_double,
+    );
+    pub fn clutter_virtual_input_device_notify_discrete_scroll(
+        dev: *mut ClutterVirtualInputDevice,
+        time_us: u64,
+        direction: c_int, // ClutterScrollDirection
+        source: c_int,    // ClutterScrollSource
+    );
     pub fn clutter_virtual_input_device_notify_keyval(
         dev: *mut ClutterVirtualInputDevice,
         time_us: u64,

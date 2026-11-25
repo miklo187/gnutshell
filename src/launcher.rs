@@ -19,6 +19,10 @@ const MAX_RESULTS: usize = 8;
 const BOX_WIDTH: f32 = 600.0;
 const ENTRY_HEIGHT: f32 = 40.0;
 const ENTRY_FONT: &CStr = c"Sans 16";
+const SCROLLBAR_WIDTH: f32 = 4.0;
+/// Space between rows and the scrollbar.
+const SCROLLBAR_GAP: f32 = 10.0;
+const SCROLLBAR_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x50);
 
 pub struct Launcher {
     display: *mut MetaDisplay,
@@ -28,6 +32,7 @@ pub struct Launcher {
     entry: *mut ClutterActor,
     hint: *mut ClutterActor,
     results: *mut ClutterActor,
+    scrollbar: *mut ClutterActor,
     state: RefCell<State>,
 }
 
@@ -35,7 +40,12 @@ pub struct Launcher {
 struct State {
     apps: Vec<gio::AppInfo>,
     matches: Vec<usize>,
+    /// Index into `matches`.
     selected: usize,
+    /// First visible index into `matches`.
+    offset: usize,
+    /// Fractional smooth-scroll rows not applied yet.
+    scroll_acc: f64,
     grab: Option<*mut ffi::ClutterGrab>,
 }
 
@@ -72,6 +82,10 @@ impl Launcher {
             let results = ffi::clutter_actor_new();
             ffi::clutter_actor_add_child(panel, results);
 
+            let scrollbar = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_background_color(scrollbar, &SCROLLBAR_COLOR);
+            ffi::clutter_actor_add_child(panel, scrollbar);
+
             ffi::clutter_actor_add_child(stage, overlay);
 
             Rc::new(Self {
@@ -82,6 +96,7 @@ impl Launcher {
                 entry,
                 hint,
                 results,
+                scrollbar,
                 state: RefCell::default(),
             })
         };
@@ -120,6 +135,13 @@ impl Launcher {
             Some(true.to_value())
         });
         panel.connect_local("button-press-event", false, |_| Some(true.to_value()));
+
+        // Wheel / touchpad over the box scrolls the result list.
+        let weak = Rc::downgrade(self);
+        panel.connect_local("scroll-event", false, move |args| {
+            with(&weak, |l| l.on_scroll(ui::event_arg(args)));
+            Some(true.to_value())
+        });
     }
 
     pub fn is_visible(&self) -> bool {
@@ -196,13 +218,32 @@ impl Launcher {
     fn move_selection(&self, delta: isize) {
         {
             let mut state = self.state.borrow_mut();
-            let n = state.matches.len().min(MAX_RESULTS);
+            let n = state.matches.len();
             if n == 0 {
                 return;
             }
             state.selected = (state.selected as isize + delta).rem_euclid(n as isize) as usize;
+            state.offset = ui::scroll_to_show(state.offset, n, MAX_RESULTS, state.selected);
         }
         self.render_results();
+    }
+
+    /// Scroll the visible window; the selection stays where it is.
+    fn on_scroll(&self, event: *const ffi::ClutterEvent) {
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            let mut acc = state.scroll_acc;
+            let rows = ui::scroll_rows(event, &mut acc);
+            state.scroll_acc = acc;
+            let max_offset = state.matches.len().saturating_sub(MAX_RESULTS);
+            let offset = (state.offset as isize + rows as isize).clamp(0, max_offset as isize) as usize;
+            let changed = offset != state.offset;
+            state.offset = offset;
+            changed
+        };
+        if changed {
+            self.render_results();
+        }
     }
 
     fn refilter(&self) {
@@ -212,6 +253,8 @@ impl Launcher {
             let matches = rank(&state.apps, &query);
             state.matches = matches;
             state.selected = 0;
+            state.offset = 0;
+            state.scroll_acc = 0.0;
         }
         unsafe {
             if query.is_empty() { ffi::clutter_actor_show(self.hint) } else { ffi::clutter_actor_hide(self.hint) }
@@ -223,9 +266,12 @@ impl Launcher {
         let state = self.state.borrow();
         let width = unsafe { ffi::clutter_actor_get_width(self.panel) } - 2.0 * BOX_PADDING;
         let scale = ui::primary_monitor_scale(self.display);
+        let offset = state.offset;
+        let total = state.matches.len();
         let shown: Vec<(String, Option<glib::Object>)> = state
             .matches
             .iter()
+            .skip(offset)
             .take(MAX_RESULTS)
             .map(|&i| {
                 let app = &state.apps[i];
@@ -239,7 +285,8 @@ impl Launcher {
         unsafe {
             ffi::clutter_actor_destroy_all_children(self.results);
             for (row_index, (name, icon)) in shown.iter().enumerate() {
-                let row = ui::list_row(name, icon.as_ref(), width, row_index == selected);
+                let index = offset + row_index;
+                let row = ui::list_row(name, icon.as_ref(), width - SCROLLBAR_GAP, index == selected);
                 ffi::clutter_actor_set_position(row, 0.0, row_index as f32 * ROW_HEIGHT);
                 ffi::clutter_actor_set_reactive(row, 1);
                 // Parent first: wrapping a still-floating actor in glib::Object
@@ -250,7 +297,7 @@ impl Launcher {
                 // on hide, so they never outlive `self`.
                 gobj(row).connect_local("button-press-event", false, move |_| {
                     let launcher = &*this;
-                    launcher.state.borrow_mut().selected = row_index;
+                    launcher.state.borrow_mut().selected = index;
                     launcher.launch_selected();
                     Some(true.to_value())
                 });
@@ -260,6 +307,22 @@ impl Launcher {
                 + ENTRY_HEIGHT
                 + if shown.is_empty() { 0.0 } else { 8.0 + shown.len() as f32 * ROW_HEIGHT };
             ffi::clutter_actor_set_size(self.panel, width + 2.0 * BOX_PADDING, height);
+
+            // Scrollbar thumb, only when there is more than fits.
+            if total > MAX_RESULTS {
+                let track = shown.len() as f32 * ROW_HEIGHT;
+                let (y, h) = scrollbar_thumb(track, total, MAX_RESULTS, offset);
+                let top = BOX_PADDING + ENTRY_HEIGHT + 8.0;
+                ffi::clutter_actor_set_size(self.scrollbar, SCROLLBAR_WIDTH, h);
+                ffi::clutter_actor_set_position(
+                    self.scrollbar,
+                    BOX_PADDING + width - SCROLLBAR_WIDTH,
+                    top + y,
+                );
+                ffi::clutter_actor_show(self.scrollbar);
+            } else {
+                ffi::clutter_actor_hide(self.scrollbar);
+            }
         }
     }
 
@@ -357,6 +420,18 @@ fn rank_strings(names: &[String], extras: &[String], query: &str) -> Vec<usize> 
     scored.into_iter().map(|(_, i)| i).collect()
 }
 
+/// Scrollbar thumb (y, height) on a `track`-px track for a window of `max`
+/// rows at `offset` over `total` rows.
+fn scrollbar_thumb(track: f32, total: usize, max: usize, offset: usize) -> (f32, f32) {
+    if total <= max {
+        return (0.0, track);
+    }
+    let h = (track * max as f32 / total as f32).max(16.0).min(track);
+    let max_offset = (total - max) as f32;
+    let y = (track - h) * (offset as f32 / max_offset).min(1.0);
+    (y.round(), h.round())
+}
+
 fn with(weak: &Weak<Launcher>, f: impl FnOnce(&Launcher)) {
     if let Some(l) = weak.upgrade() {
         f(&l);
@@ -365,7 +440,15 @@ fn with(weak: &Weak<Launcher>, f: impl FnOnce(&Launcher)) {
 
 #[cfg(test)]
 mod tests {
-    use super::rank_strings;
+    use super::{rank_strings, scrollbar_thumb};
+
+    #[test]
+    fn scrollbar_spans_track() {
+        assert_eq!(scrollbar_thumb(288.0, 8, 8, 0), (0.0, 288.0));
+        assert_eq!(scrollbar_thumb(288.0, 32, 8, 0), (0.0, 72.0));
+        assert_eq!(scrollbar_thumb(288.0, 32, 8, 24), (216.0, 72.0));
+        assert_eq!(scrollbar_thumb(288.0, 1000, 8, 0).1, 16.0);
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

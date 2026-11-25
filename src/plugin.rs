@@ -339,6 +339,7 @@ impl imp::GnativePlugin {
     /// separated by spaces: characters to type, one of `Super`, `Return`,
     /// `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
     /// a raw keysym `0x…` (tap), `down:0x…` / `up:0x…` (hold / release),
+    /// `move:X,Y` (pointer), `wheel-up` / `wheel-down`,
     /// or `_` to pause one step. Drives the real
     /// input path headless.
     #[cfg(debug_assertions)]
@@ -347,52 +348,77 @@ impl imp::GnativePlugin {
         let Some((delay, keys)) = spec.split_once(':') else { return };
         let Ok(delay) = delay.parse::<u64>() else { return };
 
-        // Each step: list of (keyval, pressed).
-        let mut steps: Vec<Vec<(u32, bool)>> = Vec::new();
+        enum Input {
+            Key(u32, bool),
+            Move(f64, f64),
+            Wheel(i32), // ClutterScrollDirection
+        }
+        use Input::*;
+        let hex = |t: &str| u32::from_str_radix(t, 16).ok();
+        let mut steps: Vec<Vec<Input>> = Vec::new();
         for tok in keys.split(' ').filter(|t| !t.is_empty()) {
-            let tap = |k: u32| vec![(k, true), (k, false)];
+            let tap = |k: u32| vec![Key(k, true), Key(k, false)];
             steps.push(match tok {
                 "Super" => tap(0xffeb),
                 "Return" => tap(crate::ui::KEY_RETURN),
                 "Escape" => tap(crate::ui::KEY_ESCAPE),
                 "Tab" => tap(crate::ui::KEY_TAB),
-                "Alt+Tab" => vec![(0xffe9, true), (0xff09, true), (0xff09, false), (0xffe9, false)],
+                "Alt+Tab" => vec![Key(0xffe9, true), Key(0xff09, true), Key(0xff09, false), Key(0xffe9, false)],
                 "Up" => tap(crate::ui::KEY_UP),
                 "Down" => tap(crate::ui::KEY_DOWN),
-                "Alt-down" => vec![(0xffe9, true)],
-                "Alt-up" => vec![(0xffe9, false)],
+                "Alt-down" => vec![Key(0xffe9, true)],
+                "Alt-up" => vec![Key(0xffe9, false)],
+                "wheel-up" => vec![Wheel(ffi::CLUTTER_SCROLL_UP)],
+                "wheel-down" => vec![Wheel(ffi::CLUTTER_SCROLL_DOWN)],
                 "_" => vec![], // pause one step
-                t if t.starts_with("0x") => u32::from_str_radix(&t[2..], 16).map_or(vec![], tap),
-                t if t.starts_with("down:0x") => {
-                    u32::from_str_radix(&t[7..], 16).map_or(vec![], |k| vec![(k, true)])
-                }
-                t if t.starts_with("up:0x") => u32::from_str_radix(&t[5..], 16).map_or(vec![], |k| vec![(k, false)]),
+                t if t.starts_with("move:") => t[5..]
+                    .split_once(',')
+                    .and_then(|(x, y)| Some(vec![Move(x.parse().ok()?, y.parse().ok()?)]))
+                    .unwrap_or_default(),
+                t if t.starts_with("0x") => hex(&t[2..]).map_or(vec![], tap),
+                t if t.starts_with("down:0x") => hex(&t[7..]).map_or(vec![], |k| vec![Key(k, true)]),
+                t if t.starts_with("up:0x") => hex(&t[5..]).map_or(vec![], |k| vec![Key(k, false)]),
                 t => t.chars().flat_map(|c| tap(c as u32)).collect(),
             });
         }
 
         let display = self.obj().upcast_ref::<MetaPlugin>().display();
-        let device: glib::Object = unsafe {
+        let (keyboard, pointer): (glib::Object, glib::Object) = unsafe {
             let stage = ffi::meta_compositor_get_stage(ffi::meta_display_get_compositor(display));
             let ctx = ffi::clutter_actor_get_context(stage as *mut ClutterActor);
             let seat = ffi::clutter_backend_get_default_seat(ffi::clutter_context_get_backend(ctx));
-            from_glib_full(ffi::clutter_seat_create_virtual_device(seat, ffi::CLUTTER_KEYBOARD_DEVICE)
-                as *mut gobject_sys::GObject)
+            let device = |kind| {
+                from_glib_full(ffi::clutter_seat_create_virtual_device(seat, kind) as *mut gobject_sys::GObject)
+            };
+            (device(ffi::CLUTTER_KEYBOARD_DEVICE), device(ffi::CLUTTER_POINTER_DEVICE))
         };
 
         let mut steps = steps.into_iter();
         glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
             glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
                 let Some(step) = steps.next() else { return glib::ControlFlow::Break };
-                for (keyval, pressed) in step {
-                    let state = if pressed { ffi::CLUTTER_KEY_STATE_PRESSED } else { ffi::CLUTTER_KEY_STATE_RELEASED };
+                let kbd = keyboard.as_ptr() as *mut ffi::ClutterVirtualInputDevice;
+                let ptr = pointer.as_ptr() as *mut ffi::ClutterVirtualInputDevice;
+                let now = glib::monotonic_time() as u64;
+                for input in step {
                     unsafe {
-                        ffi::clutter_virtual_input_device_notify_keyval(
-                            device.as_ptr() as *mut ffi::ClutterVirtualInputDevice,
-                            glib::monotonic_time() as u64,
-                            keyval,
-                            state,
-                        );
+                        match input {
+                            Key(keyval, pressed) => {
+                                let state = if pressed {
+                                    ffi::CLUTTER_KEY_STATE_PRESSED
+                                } else {
+                                    ffi::CLUTTER_KEY_STATE_RELEASED
+                                };
+                                ffi::clutter_virtual_input_device_notify_keyval(kbd, now, keyval, state);
+                            }
+                            Move(x, y) => ffi::clutter_virtual_input_device_notify_absolute_motion(ptr, now, x, y),
+                            Wheel(direction) => ffi::clutter_virtual_input_device_notify_discrete_scroll(
+                                ptr,
+                                now,
+                                direction,
+                                ffi::CLUTTER_SCROLL_SOURCE_WHEEL,
+                            ),
+                        }
                     }
                 }
                 glib::g_debug!("gnative", "debug: typed step, focus = {}", window_desc(unsafe {

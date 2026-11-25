@@ -22,7 +22,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   logind reports as unavailable are hidden.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super to open a search field over a dimmed screen. Type to
-  filter installed apps. Use Up/Down or Tab to select, and Enter or a click to
+  filter installed apps. Scroll with the mouse wheel or touchpad; use Up/Down or Tab to select, and Enter or a click to
   launch. Escape, Super or a click outside the box closes it. Apps launch through
   mutter's `MetaLaunchContext`, so they get the correct `WAYLAND_DISPLAY`/`DISPLAY`
   and an activation token. Set `GNATIVE_LAUNCHER=<command>` to run an external
@@ -123,7 +123,7 @@ Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 **Keyboard-driven test** (debug builds only): `GNATIVE_DEBUG_KEYS="<ms>:<tokens>"`
 types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
 characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` /
-`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
+`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `wheel-up` / `wheel-down`, and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
 
 `GNATIVE_DEBUG_SESSION_MENU=<ms>` opens the session menu. Only drive it toward
