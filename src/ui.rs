@@ -10,8 +10,12 @@ pub const HINT_COLOR: CoglColor = CoglColor::rgba(0x90, 0x90, 0x98, 0xff);
 pub const BOX_COLOR: CoglColor = CoglColor::rgba(0x1e, 0x1e, 0x24, 0xf8);
 pub const SELECTED_COLOR: CoglColor = CoglColor::rgba(0x35, 0x84, 0xe4, 0xff);
 pub const DIM_COLOR: CoglColor = CoglColor::rgba(0, 0, 0, 0xa0);
+pub const BUTTON_COLOR: CoglColor = CoglColor::rgba(0x3a, 0x3a, 0x44, 0xff);
+pub const DESTRUCTIVE_COLOR: CoglColor = CoglColor::rgba(0xc0, 0x1c, 0x28, 0xff);
+pub const TRANSPARENT: CoglColor = CoglColor::rgba(0, 0, 0, 0);
 
 pub const ROW_FONT: &CStr = c"Sans 12";
+pub const BODY_FONT: &CStr = c"Sans 11";
 pub const ROW_HEIGHT: f32 = 36.0;
 pub const BOX_PADDING: f32 = 16.0;
 pub const ROW_ICON_SIZE: f32 = 24.0;
@@ -130,5 +134,21 @@ pub unsafe fn list_row(
         let y = (ROW_HEIGHT - ffi::clutter_actor_get_height(label)) / 2.0;
         ffi::clutter_actor_set_position(label, x, y.floor());
         row
+    }
+}
+
+/// A reactive button: filled box with a centered label. Floating until parented.
+pub unsafe fn button(text: &str, width: f32, height: f32, color: &CoglColor) -> *mut ClutterActor {
+    unsafe {
+        let b = ffi::clutter_actor_new();
+        ffi::clutter_actor_set_size(b, width, height);
+        ffi::clutter_actor_set_background_color(b, color);
+        ffi::clutter_actor_set_reactive(b, 1);
+        let l = label(BODY_FONT, text, &TEXT_COLOR);
+        ffi::clutter_actor_add_child(b, l);
+        let x = (width - ffi::clutter_actor_get_width(l)) / 2.0;
+        let y = (height - ffi::clutter_actor_get_height(l)) / 2.0;
+        ffi::clutter_actor_set_position(l, x.floor(), y.floor());
+        b
     }
 }

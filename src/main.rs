@@ -9,6 +9,7 @@ mod icons;
 mod launcher;
 mod plugin;
 mod polkit;
+mod session;
 mod switcher;
 mod ui;
 

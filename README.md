@@ -13,6 +13,13 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 - Top panel with a centered clock. The panel reserves screen space through workspace
   struts, so maximized windows stay below it. The panel hides when the primary monitor
   shows a fullscreen window.
+- Session menu: a power button at the right of the panel opens Suspend,
+  Restart, Power Off and Log Out. Mouse or keyboard (Up/Down, Enter,
+  Escape). Everything except Suspend asks for confirmation first. Power
+  actions go to systemd-logind with interactive authorization, so polkit can
+  ask for a password through gnative's agent (for example when other users
+  are logged in). Log Out ends gnative and with it the session. Actions that
+  logind reports as unavailable are hidden.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super to open a search field over a dimmed screen. Type to
   filter installed apps. Use Up/Down or Tab to select, and Enter or a click to
@@ -99,9 +106,12 @@ Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 
 **Keyboard-driven test** (debug builds only): `GNATIVE_DEBUG_KEYS="<ms>:<tokens>"`
 types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
-characters to type, `Super`, `Return`, `Escape`, `Tab`, `Alt+Tab`, `Alt-down` /
+characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` /
 `Alt-up` (hold or release Alt), and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
+
+`GNATIVE_DEBUG_SESSION_MENU=<ms>` opens the session menu. Only drive it toward
+Log Out in tests: the other entries really suspend, restart or power off.
 
 **Switcher test** (debug builds only): `GNATIVE_DEBUG_SWITCH=<ms>` runs Alt+Tab on
 its own after the given number of milliseconds and logs the focused window before and
@@ -131,6 +141,7 @@ All mutter options work (`--help`).
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
+| `src/session.rs` | Panel power button, session menu, logind actions |
 | `src/icons.rs` | Icon theme lookup, SVG/PNG loading, window-to-app matching |
 | `src/ui.rs` | Shared colors, keysyms, Clutter helpers |
 | `src/ffi.rs` | Hand-written FFI for the libmutter / Clutter / Cogl subset in use |
@@ -148,6 +159,8 @@ All mutter options work (`--help`).
   `GNATIVE_FULL_TEARDOWN=1` to run it anyway, for debugging.
 - **gnative doesn't implement the `org.gnome.Shell` D-Bus APIs.** Screenshot, OSD and
   some portal and gnome-settings-daemon features that depend on them won't work.
+- **Log Out doesn't ask apps to save first.** gnome-session would; gnative
+  just ends the session.
 - **No keyring prompt and no lock screen yet.** Keyring unlock prompts come from
   gcr's system prompter, which gnome-shell normally replaces.
 - **Icons support only SVG and PNG.** XPM files are skipped, and the generic

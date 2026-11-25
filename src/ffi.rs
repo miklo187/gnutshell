@@ -470,6 +470,12 @@ unsafe extern "C" {
     // librsvg / cairo
     pub fn rsvg_handle_new_from_file(filename: *const c_char, error: *mut *mut GError)
         -> *mut RsvgHandle;
+    pub fn rsvg_handle_set_stylesheet(
+        handle: *mut RsvgHandle,
+        css: *const u8,
+        css_len: usize,
+        error: *mut *mut GError,
+    ) -> gboolean;
     pub fn rsvg_handle_render_document(
         handle: *mut RsvgHandle,
         cr: *mut cairo_t,

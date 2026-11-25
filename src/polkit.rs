@@ -30,12 +30,11 @@ const BUTTON_WIDTH: f32 = 130.0;
 const BUTTON_HEIGHT: f32 = 36.0;
 
 const TITLE_FONT: &CStr = c"Sans Bold 14";
-const BODY_FONT: &CStr = c"Sans 11";
+const BODY_FONT: &CStr = ui::BODY_FONT;
 const ENTRY_FONT: &CStr = c"Sans 12";
 
 const ERROR_COLOR: CoglColor = CoglColor::rgba(0xff, 0x7b, 0x63, 0xff);
 const ENTRY_BG: CoglColor = CoglColor::rgba(0x2a, 0x2a, 0x32, 0xff);
-const BUTTON_BG: CoglColor = CoglColor::rgba(0x3a, 0x3a, 0x44, 0xff);
 
 const BULLET: u32 = '\u{2022}' as u32;
 
@@ -329,8 +328,8 @@ impl AuthDialog {
             let status = ui::label(BODY_FONT, "", &ERROR_COLOR);
             ffi::clutter_text_set_line_wrap(status as *mut ClutterText, 1);
 
-            let cancel_button = button("Cancel", &BUTTON_BG);
-            let ok_button = button("Authenticate", &ui::SELECTED_COLOR);
+            let cancel_button = ui::button("Cancel", BUTTON_WIDTH, BUTTON_HEIGHT, &ui::BUTTON_COLOR);
+            let ok_button = ui::button("Authenticate", BUTTON_WIDTH, BUTTON_HEIGHT, &ui::SELECTED_COLOR);
 
             for a in [title, message, user, prompt, entry_bg, status, cancel_button, ok_button] {
                 ffi::clutter_actor_add_child(panel, a);
@@ -687,21 +686,6 @@ impl AuthDialog {
                 ((geo.height as f32 - y) * 0.4).floor(),
             );
         }
-    }
-}
-
-unsafe fn button(text: &str, color: &CoglColor) -> *mut ClutterActor {
-    unsafe {
-        let b = ffi::clutter_actor_new();
-        ffi::clutter_actor_set_size(b, BUTTON_WIDTH, BUTTON_HEIGHT);
-        ffi::clutter_actor_set_background_color(b, color);
-        ffi::clutter_actor_set_reactive(b, 1);
-        let l = ui::label(BODY_FONT, text, &ui::TEXT_COLOR);
-        ffi::clutter_actor_add_child(b, l);
-        let x = (BUTTON_WIDTH - ffi::clutter_actor_get_width(l)) / 2.0;
-        let y = (BUTTON_HEIGHT - ffi::clutter_actor_get_height(l)) / 2.0;
-        ffi::clutter_actor_set_position(l, x.floor(), y.floor());
-        b
     }
 }
 

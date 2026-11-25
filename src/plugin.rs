@@ -2,6 +2,7 @@
 
 use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
+use crate::session::SessionMenu;
 use crate::switcher::Switcher;
 use crate::ui::gobj;
 use glib::prelude::*;
@@ -143,6 +144,7 @@ mod imp {
         pub(super) launcher: RefCell<Option<Rc<Launcher>>>,
         pub(super) switcher: RefCell<Option<Rc<Switcher>>>,
         pub(super) polkit_agent: RefCell<Option<crate::polkit::Agent>>,
+        pub(super) session_menu: RefCell<Option<std::rc::Rc<SessionMenu>>>,
         pub(super) pending: RefCell<HashMap<usize, Pending>>,
     }
 
@@ -222,6 +224,8 @@ impl imp::GnativePlugin {
             *self.launcher.borrow_mut() = Some(Launcher::new(display, stage));
             *self.switcher.borrow_mut() = Some(Switcher::new(display, stage));
             *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
+            *self.session_menu.borrow_mut() =
+                Some(SessionMenu::new(display, stage, panel, PANEL_HEIGHT as f32));
 
             self.connect_signals(display);
             self.update_clock();
@@ -245,7 +249,25 @@ impl imp::GnativePlugin {
             self.debug_switch_hook();
             self.debug_keys_hook();
             self.debug_screenshot_hook();
+            self.debug_session_hook();
         }
+    }
+
+    /// Debug builds: `GNATIVE_DEBUG_SESSION_MENU=<ms>` opens the session menu
+    /// after `<ms>` milliseconds (drive it further with `GNATIVE_DEBUG_KEYS`).
+    #[cfg(debug_assertions)]
+    fn debug_session_hook(&self) {
+        let Some(delay) = std::env::var("GNATIVE_DEBUG_SESSION_MENU").ok().and_then(|v| v.parse().ok()) else {
+            return;
+        };
+        let weak = self.obj().downgrade();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
+            let Some(plugin) = weak.upgrade() else { return };
+            let menu = plugin.imp().session_menu.borrow().clone();
+            if let Some(menu) = menu {
+                menu.open_menu();
+            }
+        });
     }
 
     /// Debug builds: `GNATIVE_DEBUG_SCREENSHOT=<ms>,<ms>,...:<prefix>` paints the
@@ -302,7 +324,7 @@ impl imp::GnativePlugin {
     /// Debug builds: `GNATIVE_DEBUG_KEYS=<ms>:<keys>` types `<keys>` through a
     /// virtual keyboard after `<ms>` milliseconds, 80 ms per key. Tokens are
     /// separated by spaces: characters to type, one of `Super`, `Return`,
-    /// `Escape`, `Tab`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
+    /// `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
     /// or `_` to pause one step. Drives the real
     /// input path headless.
     #[cfg(debug_assertions)]
@@ -321,6 +343,8 @@ impl imp::GnativePlugin {
                 "Escape" => tap(crate::ui::KEY_ESCAPE),
                 "Tab" => tap(crate::ui::KEY_TAB),
                 "Alt+Tab" => vec![(0xffe9, true), (0xff09, true), (0xff09, false), (0xffe9, false)],
+                "Up" => tap(crate::ui::KEY_UP),
+                "Down" => tap(crate::ui::KEY_DOWN),
                 "Alt-down" => vec![(0xffe9, true)],
                 "Alt-up" => vec![(0xffe9, false)],
                 "_" => vec![], // pause one step
@@ -497,6 +521,9 @@ impl imp::GnativePlugin {
             ffi::clutter_actor_set_position(shell.panel, geo.x as f32, geo.y as f32);
             ffi::clutter_actor_set_size(shell.panel, geo.width as f32, PANEL_HEIGHT as f32);
             center_in_panel(shell.clock, shell.panel);
+            if let Some(menu) = self.session_menu.borrow().as_ref() {
+                menu.place_button(geo.width as f32);
+            }
 
             if ffi::meta_display_get_monitor_in_fullscreen(display, primary) != 0 {
                 ffi::clutter_actor_hide(shell.panel);
@@ -532,6 +559,9 @@ impl imp::GnativePlugin {
         }
         if let Some(switcher) = self.switcher.borrow_mut().take() {
             switcher.destroy();
+        }
+        if let Some(menu) = self.session_menu.borrow_mut().take() {
+            menu.destroy();
         }
         drop(self.polkit_agent.borrow_mut().take()); // unregisters
         let Some(shell) = self.shell.borrow_mut().take() else { return };

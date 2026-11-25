@@ -45,6 +45,33 @@ pub fn content(
         .or_else(|| load_cached(&gio::ThemedIcon::new(FALLBACK_ICON).upcast(), px, stage))
 }
 
+/// A symbolic (monochrome) theme icon, recolored to `color` the way GTK does:
+/// a stylesheet that overrides the fill of every shape.
+pub fn symbolic(
+    name: &str,
+    color: &ffi::CoglColor,
+    size: f32,
+    scale: f32,
+    stage: *mut ClutterActor,
+) -> Option<glib::Object> {
+    let px = (size * scale.max(1.0)).ceil() as i32;
+    let hex = format!("#{:02x}{:02x}{:02x}", color.red, color.green, color.blue);
+    let key = (format!("symbolic:{name}:{hex}"), px);
+    if let Some(hit) = CACHE.with_borrow(|c| c.contents.get(&key).cloned()) {
+        return hit;
+    }
+    let css = format!(
+        "rect,circle,ellipse,path,polygon,polyline {{ fill: {hex} !important; }}"
+    );
+    let content = CACHE
+        .with_borrow_mut(|c| c.theme.get_or_insert_with(IconTheme::load).lookup(name, px))
+        .filter(|p| p.extension().is_some_and(|e| e == "svg"))
+        .and_then(|path| render_svg(&path, px, Some(&css)))
+        .and_then(|surface| unsafe { upload(surface.0, stage) });
+    CACHE.with_borrow_mut(|c| c.contents.insert(key, content.clone()));
+    content
+}
+
 /// Drop cached icons whenever the `icon-theme` setting changes.
 pub fn watch_theme_changes() {
     let Some(settings) = interface_settings() else { return };
@@ -126,7 +153,7 @@ fn resolve(icon: &gio::Icon, px: i32) -> Option<PathBuf> {
 
 fn load_file(path: &Path, px: i32, stage: *mut ClutterActor) -> Option<glib::Object> {
     let surface = match path.extension().and_then(|e| e.to_str()) {
-        Some("svg") => render_svg(path, px),
+        Some("svg") => render_svg(path, px, None),
         Some("png") => render_png(path, px),
         _ => None,
     };
@@ -155,7 +182,7 @@ fn new_surface(px: i32) -> Option<Surface> {
     (unsafe { ffi::cairo_surface_status(s.0) } == ffi::CAIRO_STATUS_SUCCESS).then_some(s)
 }
 
-fn render_svg(path: &Path, px: i32) -> Option<Surface> {
+fn render_svg(path: &Path, px: i32, css: Option<&str>) -> Option<Surface> {
     let cpath = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
     unsafe {
         let mut err = std::ptr::null_mut();
@@ -165,6 +192,18 @@ fn render_svg(path: &Path, px: i32) -> Option<Surface> {
             return None;
         }
         let handle: glib::Object = from_glib_full(handle as *mut gobject_sys::GObject);
+        if let Some(css) = css {
+            let mut err = std::ptr::null_mut();
+            let ok = ffi::rsvg_handle_set_stylesheet(
+                handle.as_ptr() as *mut ffi::RsvgHandle,
+                css.as_ptr(),
+                css.len(),
+                &mut err,
+            );
+            if ok == 0 {
+                glib::Error::from_glib_full(err);
+            }
+        }
         let surface = new_surface(px)?;
         let cr = ffi::cairo_create(surface.0);
         // The viewport keeps the aspect ratio and centers the drawing.
