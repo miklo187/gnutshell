@@ -12,7 +12,7 @@ use crate::ui::{
 use gio::prelude::*;
 use glib::translate::*;
 use std::cell::RefCell;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::rc::{Rc, Weak};
 
 const MAX_RESULTS: usize = 8;
@@ -186,8 +186,9 @@ impl Launcher {
     }
 
     /// Set the search text programmatically (used by the debug hook).
+    #[cfg(debug_assertions)]
     pub fn set_query(&self, query: &str) {
-        let q = CString::new(query).unwrap_or_default();
+        let q = std::ffi::CString::new(query).unwrap_or_default();
         unsafe { ffi::clutter_text_set_text(self.entry as *mut ClutterText, q.as_ptr()) };
     }
 
