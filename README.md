@@ -27,6 +27,21 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   mutter's `MetaLaunchContext`, so they get the correct `WAYLAND_DISPLAY`/`DISPLAY`
   and an activation token. Set `GNATIVE_LAUNCHER=<command>` to run an external
   launcher instead.
+- Runs as a full GNOME session on gnome-session, like gnome-shell does, as the
+  systemd user unit `gnative.service`. gnome-session starts
+  gnome-settings-daemon (power, color/night light, keyboard, media keys,
+  housekeeping, …) and the autostart apps.
+- Media keys and custom shortcuts: gnative provides the accelerator part of
+  gnome-shell's `org.gnome.Shell` D-Bus API, which gsd-media-keys uses to bind
+  volume, brightness, media and custom shortcut keys. As in gnome-shell, only
+  gsd-media-keys, GNOME Settings and the GNOME portal may call it, and a client's
+  grabs are released when it leaves the bus.
+- On-screen display (`ShowOSD`): the volume/brightness popup, with a level bar
+  and an over-amplification mark.
+- Keyboard layouts from Settings (`org.gnome.desktop.input-sources`): up to 4
+  XKB layouts, Super+Space / Shift+Super+Space to switch, the active layout
+  shown in the panel (click to switch). The last used layout is remembered in
+  `mru-sources`, as in gnome-shell. IBus input methods are not supported yet.
 - App icons in the launcher and the switcher. Icons are looked up per the
   freedesktop icon theme spec: your `icon-theme` setting, its `Inherits`
   chain, `hicolor`, then `/usr/share/pixmaps`. They are rendered with
@@ -52,7 +67,8 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 ## Build
 
 Requires mutter 51 development files (`libmutter-51.pc`), polkit
-(`polkit-agent-1.pc`), cairo, librsvg and Rust.
+(`polkit-agent-1.pc`), cairo, librsvg, libsystemd and Rust. Running it as a
+session needs gnome-session and gnome-settings-daemon.
 
 ```sh
 cargo build --release
@@ -107,7 +123,7 @@ Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 **Keyboard-driven test** (debug builds only): `GNATIVE_DEBUG_KEYS="<ms>:<tokens>"`
 types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
 characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` /
-`Alt-up` (hold or release Alt), and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
+`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
 
 `GNATIVE_DEBUG_SESSION_MENU=<ms>` opens the session menu. Only drive it toward
@@ -120,15 +136,30 @@ after. Open at least two windows first.
 Always use `dbus-run-session` for nested or headless runs. Otherwise D-Bus-activated
 apps start on your real desktop's session bus.
 
-**As a real session from GDM:** install the binary, then copy the session file.
+**As a real session from GDM, on gnome-session:**
 
 ```sh
-sudo install -Dm755 target/release/gnative /usr/local/bin/gnative
-sudo install -Dm644 dist/gnative.desktop /usr/share/wayland-sessions/gnative.desktop
+dist/install.sh            # builds, then installs with sudo
+dist/install.sh uninstall  # removes it again
 ```
 
-Pick "gnative" on the GDM login screen. Keep a normal GNOME session available as a
-fallback.
+This installs:
+
+- `/usr/local/bin/gnative`
+- `/usr/share/wayland-sessions/gnative.desktop` (runs `gnome-session --session=gnative`)
+- `/etc/systemd/user/gnative.service`
+- `/etc/systemd/user/gnome-session@gnative.target.d/session.conf`, which makes the
+  session start gnative instead of gnome-shell, plus the usual session services
+
+Log out of GNOME first; gnome-session refuses to start a second graphical
+session for the same user. Then pick "gnative" on the GDM login screen. If the
+session fails, GDM shows the login screen again, and you can pick GNOME.
+Logs: `journalctl --user -u gnative.service -b`.
+
+**Quick test from a text console, without gnome-session:** log in on a VT
+(Ctrl+Alt+F3) and run
+`dbus-run-session -- ./target/release/gnative --wayland --display-server`.
+No session services run in this mode.
 
 All mutter options work (`--help`).
 
@@ -141,10 +172,14 @@ All mutter options work (`--help`).
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
+| `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
+| `src/osd.rs` | Volume/brightness popup |
+| `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
 | `src/session.rs` | Panel power button, session menu, logind actions |
 | `src/icons.rs` | Icon theme lookup, SVG/PNG loading, window-to-app matching |
 | `src/ui.rs` | Shared colors, keysyms, Clutter helpers |
 | `src/ffi.rs` | Hand-written FFI for the libmutter / Clutter / Cogl subset in use |
+| `dist/` | GDM session entry, systemd units, `install.sh` |
 | `build.rs` | pkg-config linking + rpath for `/usr/lib/mutter-51` |
 
 ## Caveats
@@ -157,10 +192,13 @@ All mutter options work (`--help`).
   Clutter's teardown once any text has been rendered (a use-after-free in the Pango
   pipeline cache). The process is exiting anyway, so gnative skips the teardown. Set
   `GNATIVE_FULL_TEARDOWN=1` to run it anyway, for debugging.
-- **gnative doesn't implement the `org.gnome.Shell` D-Bus APIs.** Screenshot, OSD and
-  some portal and gnome-settings-daemon features that depend on them won't work.
-- **Log Out doesn't ask apps to save first.** gnome-session would; gnative
-  just ends the session.
+- **Only part of `org.gnome.Shell` is implemented**: accelerators, `ShowOSD`
+  and the `Mode`/`OverviewActive` properties. Screenshots, screencasts, `Eval`
+  and the extensions API are missing, as is a notification server
+  (`org.freedesktop.Notifications`), so desktop notifications aren't shown.
+- **Log Out doesn't ask apps to save first.** Under gnome-session it requests
+  a forced logout (gnative has no end-session dialog for inhibitors yet);
+  without gnome-session it just ends gnative.
 - **No keyring prompt and no lock screen yet.** Keyring unlock prompts come from
   gcr's system prompter, which gnome-shell normally replaces.
 - **Icons support only SVG and PNG.** XPM files are skipped, and the generic

@@ -211,14 +211,24 @@ impl Agent {
                     ffi::polkit_unix_process_new_for_owner(pid, 0, ffi::getuid() as i32),
                     format!("process {pid}"),
                 ),
-                None => (
-                    ffi::polkit_unix_session_new_for_process_sync(
+                None => {
+                    let subject = ffi::polkit_unix_session_new_for_process_sync(
                         std::process::id() as i32,
                         std::ptr::null_mut(),
                         &mut err,
-                    ),
-                    "login session".to_string(),
-                ),
+                    );
+                    // Under gnome-session, gnative is a systemd user service,
+                    // outside the login session's process scope. gnome-session
+                    // exports the session id, like gnome-shell relies on.
+                    match std::env::var("XDG_SESSION_ID").ok().filter(|_| subject.is_null()) {
+                        Some(id) => {
+                            glib_sys::g_clear_error(&mut err);
+                            let cid = std::ffi::CString::new(id.clone()).unwrap_or_default();
+                            (ffi::polkit_unix_session_new(cid.as_ptr()), format!("login session {id}"))
+                        }
+                        None => (subject, "login session".to_string()),
+                    }
+                }
             };
             if subject.is_null() {
                 let e: glib::Error = from_glib_full(err);

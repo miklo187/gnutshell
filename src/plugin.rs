@@ -145,6 +145,9 @@ mod imp {
         pub(super) switcher: RefCell<Option<Rc<Switcher>>>,
         pub(super) polkit_agent: RefCell<Option<crate::polkit::Agent>>,
         pub(super) session_menu: RefCell<Option<std::rc::Rc<SessionMenu>>>,
+        pub(super) input_sources: RefCell<Option<std::rc::Rc<crate::keyboard::InputSources>>>,
+        pub(super) osd: RefCell<Option<std::rc::Rc<crate::osd::Osd>>>,
+        pub(super) shell_dbus: RefCell<Option<crate::shell_dbus::ShellService>>,
         pub(super) pending: RefCell<HashMap<usize, Pending>>,
     }
 
@@ -226,6 +229,11 @@ impl imp::GnativePlugin {
             *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
             *self.session_menu.borrow_mut() =
                 Some(SessionMenu::new(display, stage, panel, PANEL_HEIGHT as f32));
+            *self.input_sources.borrow_mut() =
+                crate::keyboard::InputSources::new(display, panel, PANEL_HEIGHT as f32);
+            let osd = crate::osd::Osd::new(display, stage);
+            *self.shell_dbus.borrow_mut() = Some(crate::shell_dbus::ShellService::new(display, osd.clone()));
+            *self.osd.borrow_mut() = Some(osd);
 
             self.connect_signals(display);
             self.update_clock();
@@ -325,6 +333,7 @@ impl imp::GnativePlugin {
     /// virtual keyboard after `<ms>` milliseconds, 80 ms per key. Tokens are
     /// separated by spaces: characters to type, one of `Super`, `Return`,
     /// `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
+    /// a raw keysym `0x…` (tap), `down:0x…` / `up:0x…` (hold / release),
     /// or `_` to pause one step. Drives the real
     /// input path headless.
     #[cfg(debug_assertions)]
@@ -348,6 +357,11 @@ impl imp::GnativePlugin {
                 "Alt-down" => vec![(0xffe9, true)],
                 "Alt-up" => vec![(0xffe9, false)],
                 "_" => vec![], // pause one step
+                t if t.starts_with("0x") => u32::from_str_radix(&t[2..], 16).map_or(vec![], tap),
+                t if t.starts_with("down:0x") => {
+                    u32::from_str_radix(&t[7..], 16).map_or(vec![], |k| vec![(k, true)])
+                }
+                t if t.starts_with("up:0x") => u32::from_str_radix(&t[5..], 16).map_or(vec![], |k| vec![(k, false)]),
                 t => t.chars().flat_map(|c| tap(c as u32)).collect(),
             });
         }
@@ -524,6 +538,9 @@ impl imp::GnativePlugin {
             if let Some(menu) = self.session_menu.borrow().as_ref() {
                 menu.place_button(geo.width as f32);
             }
+            if let Some(sources) = self.input_sources.borrow().as_ref() {
+                sources.place(geo.width as f32 - crate::session::BUTTON_SIZE - 8.0);
+            }
 
             if ffi::meta_display_get_monitor_in_fullscreen(display, primary) != 0 {
                 ffi::clutter_actor_hide(shell.panel);
@@ -559,6 +576,13 @@ impl imp::GnativePlugin {
         }
         if let Some(switcher) = self.switcher.borrow_mut().take() {
             switcher.destroy();
+        }
+        drop(self.shell_dbus.borrow_mut().take()); // releases the bus name and grabs
+        if let Some(osd) = self.osd.borrow_mut().take() {
+            osd.destroy();
+        }
+        if let Some(sources) = self.input_sources.borrow_mut().take() {
+            sources.destroy();
         }
         if let Some(menu) = self.session_menu.borrow_mut().take() {
             menu.destroy();

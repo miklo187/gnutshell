@@ -17,7 +17,7 @@ use std::rc::{Rc, Weak};
 
 const MENU_WIDTH: f32 = 220.0;
 const MENU_PADDING: f32 = 6.0;
-const BUTTON_SIZE: f32 = 32.0;
+pub const BUTTON_SIZE: f32 = 32.0;
 const PANEL_ICON_SIZE: f32 = 16.0;
 const DIALOG_WIDTH: f32 = 400.0;
 const PADDING: f32 = 24.0;
@@ -480,8 +480,7 @@ impl SessionMenu {
     fn perform(&self, action: Action) {
         glib::g_message!("gnative", "session action: {action:?}");
         let Some((method, _)) = action.logind() else {
-            // Log Out: end gnative, and with it the session.
-            unsafe { ffi::meta_context_terminate(ffi::meta_display_get_context(self.display)) };
+            self.log_out();
             return;
         };
         let Some(bus) = self.state.borrow().bus.clone() else {
@@ -501,6 +500,38 @@ impl SessionMenu {
             move |result| {
                 if let Err(e) = result {
                     glib::g_warning!("gnative", "logind {method} failed: {e}");
+                }
+            },
+        );
+    }
+
+    /// Inside gnome-session, ask it to end the session (it stops the session
+    /// services in order). Otherwise, or if that fails, just end gnative.
+    fn log_out(&self) {
+        let display = self.display;
+        let terminate = move || unsafe {
+            ffi::meta_context_terminate(ffi::meta_display_get_context(display))
+        };
+        let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
+            terminate();
+            return;
+        };
+        bus.call(
+            Some("org.gnome.SessionManager"),
+            "/org/gnome/SessionManager",
+            "org.gnome.SessionManager",
+            "Logout",
+            // 2 = forced: no further dialog, inhibitors ignored. The user
+            // already confirmed in gnative's own dialog.
+            Some(&(2u32,).to_variant()),
+            None,
+            gio::DBusCallFlags::NO_AUTO_START,
+            -1,
+            gio::Cancellable::NONE,
+            move |result| {
+                if let Err(e) = result {
+                    glib::g_debug!("gnative", "gnome-session Logout unavailable ({e}); exiting");
+                    terminate();
                 }
             },
         );

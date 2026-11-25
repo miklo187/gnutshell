@@ -50,6 +50,8 @@ opaque!(
     RsvgHandle,
     cairo_t,
     cairo_surface_t,
+    ClutterInputDevice,
+    MetaKeymapDescription,
 );
 
 /// MetaWindowActor is a ClutterActor subclass; we only ever pass it around.
@@ -112,6 +114,7 @@ pub const COGL_PIXEL_FORMAT_BGRA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7) | (1 
 pub const CLUTTER_CONTENT_GRAVITY_RESIZE_ASPECT: c_int = 10;
 pub const CAIRO_FORMAT_ARGB32: c_int = 0;
 pub const CAIRO_STATUS_SUCCESS: c_int = 0;
+pub const META_KEY_BINDING_IS_REVERSED: c_uint = 1 << 2;
 pub const CLUTTER_KEY_STATE_RELEASED: c_int = 0;
 pub const CLUTTER_KEY_STATE_PRESSED: c_int = 1;
 
@@ -357,6 +360,16 @@ unsafe extern "C" {
         user_data: glib_sys::gpointer,
         free_data: glib_sys::GDestroyNotify,
     ) -> gboolean;
+    pub fn meta_display_add_keybinding(
+        display: *mut MetaDisplay,
+        name: *const c_char,
+        settings: *mut gio::ffi::GSettings,
+        flags: c_uint, // MetaKeyBindingFlags
+        handler: MetaKeyHandlerFunc,
+        user_data: glib_sys::gpointer,
+        free_data: glib_sys::GDestroyNotify,
+    ) -> c_uint;
+    pub fn meta_display_remove_keybinding(display: *mut MetaDisplay, name: *const c_char) -> gboolean;
     pub fn meta_key_binding_is_reversed(binding: *mut MetaKeyBinding) -> gboolean;
 
     // tab list / window activation
@@ -402,6 +415,7 @@ unsafe extern "C" {
         cancellable: *mut gio::ffi::GCancellable,
         error: *mut *mut GError,
     ) -> *mut PolkitSubject;
+    pub fn polkit_unix_session_new(session_id: *const c_char) -> *mut PolkitSubject;
     pub fn polkit_unix_process_new_for_owner(pid: c_int, start_time: u64, uid: c_int)
         -> *mut PolkitSubject;
     pub fn polkit_unix_user_get_type() -> GType;
@@ -464,6 +478,11 @@ unsafe extern "C" {
         texture: *mut CoglTexture,
         clip: *mut MtkRectangle,
     ) -> *mut ClutterContent;
+    pub fn clutter_actor_set_child_above_sibling(
+        parent: *mut ClutterActor,
+        child: *mut ClutterActor,
+        sibling: *mut ClutterActor,
+    );
     pub fn clutter_actor_set_content(actor: *mut ClutterActor, content: *mut ClutterContent);
     pub fn clutter_actor_set_content_gravity(actor: *mut ClutterActor, gravity: c_int);
 
@@ -503,4 +522,40 @@ unsafe extern "C" {
         y: c_double,
     );
     pub fn cairo_paint(cr: *mut cairo_t);
+
+    // input sources / keymaps
+    pub fn meta_keymap_description_new_from_rules(
+        model: *const c_char,
+        layout: *const c_char,
+        variant: *const c_char,
+        options: *const c_char,
+        display_names: *mut *mut c_char,
+        short_names: *mut *mut c_char,
+    ) -> *mut MetaKeymapDescription;
+    pub fn meta_keymap_description_unref(desc: *mut MetaKeymapDescription);
+    pub fn meta_backend_set_keymap_async(
+        backend: *mut MetaBackend,
+        desc: *mut MetaKeymapDescription,
+        layout_index: u32,
+        cancellable: *mut gio::ffi::GCancellable,
+        callback: gio::ffi::GAsyncReadyCallback,
+        user_data: glib_sys::gpointer,
+    );
+    pub fn meta_backend_set_keymap_finish(
+        backend: *mut MetaBackend,
+        result: *mut gio::ffi::GAsyncResult,
+        error: *mut *mut GError,
+    ) -> gboolean;
+
+    // accelerators for org.gnome.Shell
+    pub fn meta_display_grab_accelerator(
+        display: *mut MetaDisplay,
+        accelerator: *const c_char,
+        flags: c_uint, // MetaKeyBindingFlags
+    ) -> c_uint;
+    pub fn meta_display_ungrab_accelerator(display: *mut MetaDisplay, action: c_uint) -> gboolean;
+    pub fn clutter_input_device_get_device_node(device: *mut ClutterInputDevice) -> *const c_char;
+
+    // libsystemd
+    pub fn sd_notify(unset_environment: c_int, state: *const c_char) -> c_int;
 }

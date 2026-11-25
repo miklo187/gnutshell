@@ -1,6 +1,8 @@
 [Desktop Entry]
 Name=gnative
-Comment=Rust shell on libmutter
-Exec=/usr/local/bin/gnative --wayland --display-server
+Comment=GNOME-style shell written in Rust, on gnome-session
+Exec=/usr/bin/gnome-session --session=gnative
+TryExec=/usr/bin/gnome-session
 Type=Application
 DesktopNames=gnative;GNOME
+X-GDM-SessionRegisters=true

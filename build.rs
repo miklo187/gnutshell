@@ -14,6 +14,7 @@ fn main() {
         "polkit-agent-1".to_string(),
         "cairo".to_string(),
         "librsvg-2.0".to_string(),
+        "libsystemd".to_string(),
     ];
 
     for name in &libs {

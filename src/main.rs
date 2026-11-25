@@ -6,10 +6,13 @@
 
 mod ffi;
 mod icons;
+mod keyboard;
 mod launcher;
+mod osd;
 mod plugin;
 mod polkit;
 mod session;
+mod shell_dbus;
 mod switcher;
 mod ui;
 
@@ -69,6 +72,9 @@ fn run() -> Result<(), String> {
             }
 
             ffi::meta_context_notify_ready(ctx);
+            // Under systemd (gnome-session), signal that the shell is up.
+            // No-op when not started by systemd.
+            ffi::sd_notify(0, c"READY=1".as_ptr());
             check(ffi::meta_context_run_main_loop(ctx, &mut err), err, "main loop")
         })();
 
