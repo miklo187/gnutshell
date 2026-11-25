@@ -218,6 +218,7 @@ impl imp::GnativePlugin {
             ffi::clutter_actor_add_child(stage, panel);
 
             *self.shell.borrow_mut() = Some(Shell { display, panel, clock, background });
+            crate::icons::watch_theme_changes();
             *self.launcher.borrow_mut() = Some(Launcher::new(display, stage));
             *self.switcher.borrow_mut() = Some(Switcher::new(display, stage));
             *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
@@ -301,7 +302,8 @@ impl imp::GnativePlugin {
     /// Debug builds: `GNATIVE_DEBUG_KEYS=<ms>:<keys>` types `<keys>` through a
     /// virtual keyboard after `<ms>` milliseconds, 80 ms per key. Tokens are
     /// separated by spaces: characters to type, one of `Super`, `Return`,
-    /// `Escape`, `Tab`, `Alt+Tab`, or `_` to pause one step. Drives the real
+    /// `Escape`, `Tab`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
+    /// or `_` to pause one step. Drives the real
     /// input path headless.
     #[cfg(debug_assertions)]
     fn debug_keys_hook(&self) {
@@ -319,6 +321,8 @@ impl imp::GnativePlugin {
                 "Escape" => tap(crate::ui::KEY_ESCAPE),
                 "Tab" => tap(crate::ui::KEY_TAB),
                 "Alt+Tab" => vec![(0xffe9, true), (0xff09, true), (0xff09, false), (0xffe9, false)],
+                "Alt-down" => vec![(0xffe9, true)],
+                "Alt-up" => vec![(0xffe9, false)],
                 "_" => vec![], // pause one step
                 t => t.chars().flat_map(|c| tap(c as u32)).collect(),
             });

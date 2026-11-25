@@ -4,6 +4,7 @@
 //! Enter launches, Escape / Super / a click outside the box closes.
 
 use crate::ffi::{self, ClutterActor, ClutterText, MetaDisplay};
+use crate::icons;
 use crate::ui::{
     self, gobj, BOX_COLOR, BOX_PADDING, DIM_COLOR, HINT_COLOR, KEY_DOWN, KEY_ESCAPE,
     KEY_ISO_LEFT_TAB, KEY_TAB, KEY_UP, ROW_HEIGHT, TEXT_COLOR,
@@ -221,19 +222,24 @@ impl Launcher {
     fn render_results(&self) {
         let state = self.state.borrow();
         let width = unsafe { ffi::clutter_actor_get_width(self.panel) } - 2.0 * BOX_PADDING;
-        let shown: Vec<(usize, String)> = state
+        let scale = ui::primary_monitor_scale(self.display);
+        let shown: Vec<(String, Option<glib::Object>)> = state
             .matches
             .iter()
             .take(MAX_RESULTS)
-            .map(|&i| (i, state.apps[i].display_name().to_string()))
+            .map(|&i| {
+                let app = &state.apps[i];
+                let icon = icons::content(app.icon().as_ref(), ui::ROW_ICON_SIZE, scale, self.stage);
+                (app.display_name().to_string(), icon)
+            })
             .collect();
         let selected = state.selected;
         drop(state);
 
         unsafe {
             ffi::clutter_actor_destroy_all_children(self.results);
-            for (row_index, (_, name)) in shown.iter().enumerate() {
-                let row = ui::list_row(name, width, row_index == selected);
+            for (row_index, (name, icon)) in shown.iter().enumerate() {
+                let row = ui::list_row(name, icon.as_ref(), width, row_index == selected);
                 ffi::clutter_actor_set_position(row, 0.0, row_index as f32 * ROW_HEIGHT);
                 ffi::clutter_actor_set_reactive(row, 1);
                 // Parent first: wrapping a still-floating actor in glib::Object

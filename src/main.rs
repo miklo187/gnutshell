@@ -5,6 +5,7 @@
 //! loop. No GJS is involved.
 
 mod ffi;
+mod icons;
 mod launcher;
 mod plugin;
 mod polkit;

@@ -12,6 +12,8 @@ fn main() {
         format!("mutter-cogl-{MUTTER_API}"),
         format!("mutter-mtk-{MUTTER_API}"),
         "polkit-agent-1".to_string(),
+        "cairo".to_string(),
+        "librsvg-2.0".to_string(),
     ];
 
     for name in &libs {

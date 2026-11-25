@@ -20,6 +20,13 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   mutter's `MetaLaunchContext`, so they get the correct `WAYLAND_DISPLAY`/`DISPLAY`
   and an activation token. Set `GNATIVE_LAUNCHER=<command>` to run an external
   launcher instead.
+- App icons in the launcher and the switcher. Icons are looked up per the
+  freedesktop icon theme spec: your `icon-theme` setting, its `Inherits`
+  chain, `hicolor`, then `/usr/share/pixmaps`. They are rendered with
+  librsvg/cairo, with no GTK and no gdk-pixbuf, and cached as GPU textures.
+  Changing the icon theme takes effect live. In the switcher, each window is
+  matched to its app by sandboxed/GTK application id, Wayland app id or
+  `WM_CLASS`, or a desktop file's `StartupWMClass`.
 - Window switcher: Alt+Tab or Super+Tab (your `switch-applications`/`switch-windows`
   keybindings). Windows on the current workspace are listed in most-recently-used
   order. Tab and the arrow keys cycle, Shift+Tab goes back. Releasing the modifier
@@ -38,7 +45,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 ## Build
 
 Requires mutter 51 development files (`libmutter-51.pc`), polkit
-(`polkit-agent-1.pc`) and Rust.
+(`polkit-agent-1.pc`), cairo, librsvg and Rust.
 
 ```sh
 cargo build --release
@@ -90,6 +97,12 @@ A headless test that never types a password: register for a test shell, run
 and send Escape with `GNATIVE_DEBUG_KEYS`. `pkcheck` exits with 3 (dismissed).
 Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 
+**Keyboard-driven test** (debug builds only): `GNATIVE_DEBUG_KEYS="<ms>:<tokens>"`
+types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
+characters to type, `Super`, `Return`, `Escape`, `Tab`, `Alt+Tab`, `Alt-down` /
+`Alt-up` (hold or release Alt), and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
+saves raw BGRA screenshots at those times.
+
 **Switcher test** (debug builds only): `GNATIVE_DEBUG_SWITCH=<ms>` runs Alt+Tab on
 its own after the given number of milliseconds and logs the focused window before and
 after. Open at least two windows first.
@@ -118,6 +131,7 @@ All mutter options work (`--help`).
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
+| `src/icons.rs` | Icon theme lookup, SVG/PNG loading, window-to-app matching |
 | `src/ui.rs` | Shared colors, keysyms, Clutter helpers |
 | `src/ffi.rs` | Hand-written FFI for the libmutter / Clutter / Cogl subset in use |
 | `build.rs` | pkg-config linking + rpath for `/usr/lib/mutter-51` |
@@ -136,4 +150,5 @@ All mutter options work (`--help`).
   some portal and gnome-settings-daemon features that depend on them won't work.
 - **No keyring prompt and no lock screen yet.** Keyring unlock prompts come from
   gcr's system prompter, which gnome-shell normally replaces.
-- **The launcher shows no app icons yet.** It lists names only.
+- **Icons support only SVG and PNG.** XPM files are skipped, and the generic
+  fallback icon is shown instead.

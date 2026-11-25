@@ -7,8 +7,9 @@
 //! quick Alt+Tab just flips to the previous window without flashing UI.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay, MetaWindow};
+use crate::icons;
 use crate::ui::{self, gobj};
-use glib::prelude::*;
+use gio::prelude::*;
 use std::cell::RefCell;
 use std::ffi::{c_char, CStr};
 use std::rc::{Rc, Weak};
@@ -254,7 +255,10 @@ impl Switcher {
 
     fn render(&self) {
         let state = self.state.borrow();
+        let scale = ui::primary_monitor_scale(self.display);
         let titles: Vec<String> = state.windows.iter().map(window_title).collect();
+        let icons: Vec<Option<glib::Object>> =
+            state.windows.iter().map(|w| window_icon(w, scale, self.stage)).collect();
         let selected = state.selected;
         drop(state);
 
@@ -271,7 +275,7 @@ impl Switcher {
 
             ffi::clutter_actor_destroy_all_children(self.panel);
             for (slot, index) in (first..first + shown).enumerate() {
-                let row = ui::list_row(&titles[index], inner_w, index == selected);
+                let row = ui::list_row(&titles[index], icons[index].as_ref(), inner_w, index == selected);
                 ffi::clutter_actor_set_position(
                     row,
                     ui::BOX_PADDING,
@@ -311,6 +315,12 @@ fn window_title(window: &glib::Object) -> String {
             (true, true) => "Untitled window".into(),
         }
     }
+}
+
+fn window_icon(window: &glib::Object, scale: f32, stage: *mut ClutterActor) -> Option<glib::Object> {
+    let app = icons::app_for_window(window.as_ptr() as *mut MetaWindow);
+    let icon = app.and_then(|a| a.icon());
+    icons::content(icon.as_ref(), ui::ROW_ICON_SIZE, scale, stage)
 }
 
 unsafe fn cstr(p: *const c_char) -> String {

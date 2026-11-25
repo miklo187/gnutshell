@@ -44,6 +44,12 @@ opaque!(
     PolkitIdentity,
     PolkitDetails,
     PolkitAgentSession,
+    CoglContext,
+    CoglTexture,
+    ClutterContent,
+    RsvgHandle,
+    cairo_t,
+    cairo_surface_t,
 );
 
 /// MetaWindowActor is a ClutterActor subclass; we only ever pass it around.
@@ -82,6 +88,15 @@ impl CoglColor {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct RsvgRectangle {
+    pub x: c_double,
+    pub y: c_double,
+    pub width: c_double,
+    pub height: c_double,
+}
+
 // ---------------------------------------------------------------- enums
 
 pub const META_SIDE_TOP: c_int = 1 << 2;
@@ -94,6 +109,9 @@ pub const CLUTTER_KEYBOARD_DEVICE: c_int = 1;
 pub const CLUTTER_PAINT_FLAG_CLEAR: c_int = 1 << 2;
 /// COGL_PIXEL_FORMAT_BGRA_8888_PRE = 3 | A_BIT | PREMULT_BIT | BGR_BIT
 pub const COGL_PIXEL_FORMAT_BGRA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7) | (1 << 5);
+pub const CLUTTER_CONTENT_GRAVITY_RESIZE_ASPECT: c_int = 10;
+pub const CAIRO_FORMAT_ARGB32: c_int = 0;
+pub const CAIRO_STATUS_SUCCESS: c_int = 0;
 pub const CLUTTER_KEY_STATE_RELEASED: c_int = 0;
 pub const CLUTTER_KEY_STATE_PRESSED: c_int = 1;
 
@@ -426,4 +444,57 @@ unsafe extern "C" {
         keyval: u32,
         key_state: c_int, // ClutterKeyState
     );
+
+    // app icons: window app ids, scale, textures
+    pub fn meta_window_get_sandboxed_app_id(window: *mut MetaWindow) -> *const c_char;
+    pub fn meta_window_get_gtk_application_id(window: *mut MetaWindow) -> *const c_char;
+    pub fn meta_window_get_wm_class_instance(window: *mut MetaWindow) -> *const c_char;
+    pub fn meta_display_get_monitor_scale(display: *mut MetaDisplay, monitor: c_int) -> c_float;
+    pub fn clutter_backend_get_cogl_context(backend: *mut ClutterBackend) -> *mut CoglContext;
+    pub fn cogl_texture_2d_new_from_data(
+        ctx: *mut CoglContext,
+        width: c_int,
+        height: c_int,
+        format: c_int, // CoglPixelFormat
+        rowstride: c_int,
+        data: *const u8,
+        error: *mut *mut GError,
+    ) -> *mut CoglTexture;
+    pub fn clutter_texture_content_new_from_texture(
+        texture: *mut CoglTexture,
+        clip: *mut MtkRectangle,
+    ) -> *mut ClutterContent;
+    pub fn clutter_actor_set_content(actor: *mut ClutterActor, content: *mut ClutterContent);
+    pub fn clutter_actor_set_content_gravity(actor: *mut ClutterActor, gravity: c_int);
+
+    // librsvg / cairo
+    pub fn rsvg_handle_new_from_file(filename: *const c_char, error: *mut *mut GError)
+        -> *mut RsvgHandle;
+    pub fn rsvg_handle_render_document(
+        handle: *mut RsvgHandle,
+        cr: *mut cairo_t,
+        viewport: *const RsvgRectangle,
+        error: *mut *mut GError,
+    ) -> gboolean;
+    pub fn cairo_image_surface_create(format: c_int, width: c_int, height: c_int)
+        -> *mut cairo_surface_t;
+    pub fn cairo_image_surface_create_from_png(filename: *const c_char) -> *mut cairo_surface_t;
+    pub fn cairo_image_surface_get_width(surface: *mut cairo_surface_t) -> c_int;
+    pub fn cairo_image_surface_get_height(surface: *mut cairo_surface_t) -> c_int;
+    pub fn cairo_image_surface_get_stride(surface: *mut cairo_surface_t) -> c_int;
+    pub fn cairo_image_surface_get_data(surface: *mut cairo_surface_t) -> *mut u8;
+    pub fn cairo_surface_status(surface: *mut cairo_surface_t) -> c_int;
+    pub fn cairo_surface_flush(surface: *mut cairo_surface_t);
+    pub fn cairo_surface_destroy(surface: *mut cairo_surface_t);
+    pub fn cairo_create(target: *mut cairo_surface_t) -> *mut cairo_t;
+    pub fn cairo_destroy(cr: *mut cairo_t);
+    pub fn cairo_scale(cr: *mut cairo_t, sx: c_double, sy: c_double);
+    pub fn cairo_translate(cr: *mut cairo_t, tx: c_double, ty: c_double);
+    pub fn cairo_set_source_surface(
+        cr: *mut cairo_t,
+        surface: *mut cairo_surface_t,
+        x: c_double,
+        y: c_double,
+    );
+    pub fn cairo_paint(cr: *mut cairo_t);
 }
