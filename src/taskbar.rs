@@ -284,7 +284,7 @@ impl Taskbar {
         object.connect_local("button-press-event", false, move |args| {
             let event = ui::event_arg(args);
             match unsafe { ffi::clutter_event_get_button(event) } {
-                1 => with(&weak, |t| t.click(&key)),
+                1 => with(&weak, |t| t.click(&key, ui::wants_new_window(event))),
                 3 => with(&weak, |t| t.open_menu(&key, ui::event_coords(event))),
                 _ => {}
             }
@@ -314,13 +314,21 @@ impl Taskbar {
     }
 
     /// Start a pinned app. For a window: focus it, or minimize it if it has
-    /// the focus already.
-    fn click(&self, key: &Key) {
+    /// the focus already. With `new_window`, open another window of its app
+    /// instead, if the app can be told.
+    fn click(&self, key: &Key, new_window: bool) {
         if crate::lockscreen::is_locked() {
             return;
         }
         let Some(content) = self.content(key) else { return };
         self.hide_preview();
+        if new_window
+            && let Content::Window(window) = &content
+            && let Some(app) = pins::app_id_of(window).and_then(|id| pins::app(&id))
+        {
+            pins::launch(self.display, &app, true);
+            return;
+        }
         match content {
             Content::Shortcut(app) => pins::launch(self.display, &app, false),
             Content::Window(window) => {

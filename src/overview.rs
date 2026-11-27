@@ -1,5 +1,6 @@
-//! The window overview: every open window as a tile with a live picture,
-//! scrollable when the tiles do not fit.
+//! Window tiles with live pictures, scrollable when they do not fit. The
+//! window overview shows every open window; Alt+Tab (see `switcher`) uses the
+//! same tiles for the windows of the active workspace.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay};
 use crate::ui::{self, gobj};
@@ -123,7 +124,18 @@ struct State {
     track_top: f32,
 }
 
+/// What the tiles are for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// All windows, in the order they were opened. Stays until closed.
+    Overview,
+    /// The active workspace's windows, the one used last first. Releasing the
+    /// modifier goes to the selected one.
+    Switcher,
+}
+
 pub struct Overview {
+    kind: Kind,
     display: *mut MetaDisplay,
     stage: *mut ClutterActor,
     overlay: *mut ClutterActor,
@@ -139,7 +151,7 @@ pub struct Overview {
 
 impl Overview {
     /// Build the (hidden) overview as the topmost child of `stage`.
-    pub fn new(display: *mut MetaDisplay, stage: *mut ClutterActor) -> Rc<Self> {
+    pub fn new(display: *mut MetaDisplay, stage: *mut ClutterActor, kind: Kind) -> Rc<Self> {
         let overview = unsafe {
             let overlay = ffi::clutter_actor_new();
             ffi::clutter_actor_set_background_color(overlay, &BACKDROP);
@@ -167,6 +179,7 @@ impl Overview {
 
             ffi::clutter_actor_add_child(stage, overlay);
             Rc::new(Self {
+                kind,
                 display,
                 stage,
                 overlay,
@@ -189,6 +202,17 @@ impl Overview {
         let weak = Rc::downgrade(self);
         overlay.connect_local("key-press-event", false, move |args| {
             with(&weak, |o| o.on_key(ui::key_symbol(ui::event_arg(args))));
+            Some(true.to_value())
+        });
+        let weak = Rc::downgrade(self);
+        overlay.connect_local("key-release-event", false, move |args| {
+            if ui::KEY_MODIFIERS.contains(&ui::key_symbol(ui::event_arg(args))) {
+                with(&weak, |o| {
+                    if o.kind == Kind::Switcher {
+                        o.activate_selected();
+                    }
+                });
+            }
             Some(true.to_value())
         });
         // A click on anything that is not a tile or the scrollbar closes.
@@ -230,6 +254,12 @@ impl Overview {
     }
 
     pub fn show(self: &Rc<Self>) {
+        let focused = windows::focused(self.display);
+        self.present(focused);
+    }
+
+    /// Show the tiles with the window `select` selected, or else the first.
+    pub fn present(self: &Rc<Self>, select: Option<u64>) {
         if self.is_visible() {
             return;
         }
@@ -239,13 +269,51 @@ impl Overview {
             state.scroll_acc = 0.0;
             state.drag = None;
         }
-        let focused = windows::focused(self.display);
-        self.build(focused);
+        self.build(select);
         unsafe {
             ffi::clutter_actor_show(self.overlay);
             let grab = ffi::clutter_stage_grab(self.stage as *mut ffi::ClutterStage, self.overlay);
             self.state.borrow_mut().grab = Some(grab);
             ffi::clutter_actor_grab_key_focus(self.overlay);
+        }
+    }
+
+    /// Whether the tiles can be seen. They take input either way.
+    pub fn set_painted(&self, painted: bool) {
+        unsafe { ffi::clutter_actor_set_opacity(self.overlay, if painted { 0xff } else { 0 }) };
+    }
+
+    /// The windows that get a tile, in tile order.
+    pub fn windows(&self) -> Vec<glib::Object> {
+        match self.kind {
+            Kind::Overview => windows::list(self.display),
+            Kind::Switcher => windows::on_active_workspace(self.display),
+        }
+    }
+
+    /// Move the selection to the next or previous tile, wrapping around.
+    pub fn cycle(&self, delta: isize) {
+        {
+            let mut state = self.state.borrow_mut();
+            let count = state.windows.len();
+            if count == 0 {
+                return;
+            }
+            state.selected = (state.selected as isize + delta).rem_euclid(count as isize) as usize;
+        }
+        self.highlight();
+        self.reveal_selected();
+    }
+
+    /// Close and go to the selected window.
+    pub fn activate_selected(&self) {
+        let id = {
+            let state = self.state.borrow();
+            state.windows.get(state.selected).map(windows::id)
+        };
+        match id {
+            Some(id) => self.choose(id),
+            None => self.hide(),
         }
     }
 
@@ -287,7 +355,7 @@ impl Overview {
 
     /// Lay out the tiles, selecting the window `select` if it is there.
     fn build(self: &Rc<Self>, select: Option<u64>) {
-        let list = windows::list(self.display);
+        let list = self.windows();
         let geo = ui::primary_monitor_geometry(self.display).unwrap_or_default();
         let (width, height) = (geo.width as f32, geo.height as f32);
         let count = list.len();
@@ -426,7 +494,7 @@ impl Overview {
         let window = self.state.borrow().windows.iter().find(|w| windows::id(w) == id).cloned();
         self.hide();
         // It may have been closed since the tiles were built.
-        if let Some(window) = window.filter(|_| windows::list(self.display).iter().any(|w| windows::id(w) == id)) {
+        if let Some(window) = window.filter(|_| self.windows().iter().any(|w| windows::id(w) == id)) {
             windows::activate(self.display, &window);
         }
     }
@@ -504,16 +572,9 @@ impl Overview {
     fn on_key(&self, keysym: u32) {
         let (dx, dy) = match keysym {
             ui::KEY_ESCAPE => return self.hide(),
-            ui::KEY_RETURN | ui::KEY_KP_ENTER => {
-                let id = {
-                    let state = self.state.borrow();
-                    state.windows.get(state.selected).map(windows::id)
-                };
-                if let Some(id) = id {
-                    self.choose(id);
-                }
-                return;
-            }
+            ui::KEY_RETURN | ui::KEY_KP_ENTER => return self.activate_selected(),
+            ui::KEY_TAB if self.kind == Kind::Switcher => return self.cycle(1),
+            ui::KEY_ISO_LEFT_TAB if self.kind == Kind::Switcher => return self.cycle(-1),
             ui::KEY_LEFT | ui::KEY_ISO_LEFT_TAB => (-1, 0),
             ui::KEY_RIGHT | ui::KEY_TAB => (1, 0),
             ui::KEY_UP => (0, -1),

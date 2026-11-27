@@ -3,7 +3,7 @@
 use crate::background::Background;
 use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
-use crate::overview::Overview;
+use crate::overview::{Kind, Overview};
 use crate::pins::Pins;
 use crate::shortcuts::TopShortcuts;
 use crate::taskbar::Taskbar;
@@ -404,7 +404,7 @@ impl imp::GnutshellPlugin {
                 PANEL_HEIGHT as f32,
             );
             let taskbar = Taskbar::new(display, stage, pins.clone(), &PANEL_COLOR);
-            let overview = Overview::new(display, stage);
+            let overview = Overview::new(display, stage, Kind::Overview);
             let window_tracker = crate::windows::Tracker::new(display);
             let weak_bar = Rc::downgrade(&taskbar);
             let weak_overview = Rc::downgrade(&overview);
@@ -442,7 +442,17 @@ impl imp::GnutshellPlugin {
             });
             crate::icons::watch_theme_changes();
             *self.launcher.borrow_mut() = Some(Launcher::new(display, stage));
-            *self.switcher.borrow_mut() = Some(Switcher::new(display, stage));
+            let switcher = Switcher::new(display, stage);
+            let weak_switcher = Rc::downgrade(&switcher);
+            let tracker = self.shell.borrow().as_ref().map(|s| s.window_tracker.clone());
+            if let Some(tracker) = tracker {
+                tracker.listen(move || {
+                    if let Some(switcher) = weak_switcher.upgrade() {
+                        switcher.refresh();
+                    }
+                });
+            }
+            *self.switcher.borrow_mut() = Some(switcher);
             *self.window_menu.borrow_mut() = Some(WindowMenu::new(display, stage, pins));
             let menu_handler = || {
                 let weak = self.obj().downgrade();

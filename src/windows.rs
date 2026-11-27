@@ -35,9 +35,23 @@ pub fn list(display: *mut MetaDisplay) -> Vec<glib::Object> {
 
 /// The same windows, the one used last first.
 pub fn recent(display: *mut MetaDisplay) -> Vec<glib::Object> {
+    tab_list(display, std::ptr::null_mut())
+}
+
+/// Those of the active workspace, the one used last first.
+pub fn on_active_workspace(display: *mut MetaDisplay) -> Vec<glib::Object> {
+    let workspace = unsafe {
+        let manager = ffi::meta_display_get_workspace_manager(display);
+        ffi::meta_workspace_manager_get_active_workspace(manager)
+    };
+    tab_list(display, workspace)
+}
+
+/// Mutter's tab list of `workspace`, or of all of them if it is null.
+fn tab_list(display: *mut MetaDisplay, workspace: *mut ffi::MetaWorkspace) -> Vec<glib::Object> {
     let mut out = Vec::new();
     unsafe {
-        let list = ffi::meta_display_get_tab_list(display, ffi::META_TAB_LIST_NORMAL, std::ptr::null_mut());
+        let list = ffi::meta_display_get_tab_list(display, ffi::META_TAB_LIST_NORMAL, workspace);
         let mut node = list;
         while !node.is_null() {
             out.push(gobj((*node).data as *mut MetaWindow));

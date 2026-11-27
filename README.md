@@ -35,7 +35,10 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   windows, their entries take that place. On the top bar, pinned apps are
   icons right of the panel buttons, with a line under those that are running.
   A click starts the app, focuses the window of it used last, or minimizes that
-  window if it already has the focus. Right-click a shortcut for Open (Open New
+  window if it already has the focus. Shift+click or Ctrl+click on a top bar
+  shortcut or a taskbar entry opens a new window of the app, through its
+  "new window" desktop action if it has one; an app without one decides what
+  starting it again does. Right-click a shortcut for Open (Open New
   Window while it runs) and the unpin entries. The list is stored in
   `~/.config/gnutshell/pinned.ini`; it is not GNOME's dash favorites. Apps
   can't be pinned from the app launcher, shortcuts can't be reordered by
@@ -173,11 +176,12 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   matched to its app by sandboxed/GTK application id, Wayland app id or
   `WM_CLASS`, or a desktop file's `StartupWMClass`.
 - Window switcher: Alt+Tab or Super+Tab (your `switch-applications`/`switch-windows`
-  keybindings). Windows on the current workspace are listed in most-recently-used
-  order. Tab and the arrow keys cycle, Shift+Tab goes back. Releasing the modifier
-  activates the selection, and Escape cancels. The popup appears only after 120 ms,
-  so a quick Alt+Tab just flips windows. This version lists windows, not apps
-  grouped by window.
+  keybindings) shows the windows of the current workspace as live tiles, like
+  the window overview, in most-recently-used order. Tab and Shift+Tab cycle and
+  the arrow keys move in the grid. Releasing the modifier activates the
+  selection, and Escape cancels. The tiles appear only after 120 ms, so a quick
+  Alt+Tab just flips windows. This version lists windows, not apps grouped by
+  window.
 
 - Polkit authentication agent: a modal "Authentication Required" dialog for
   `pkexec`, software installs, system settings and similar. It drives
@@ -305,12 +309,12 @@ All mutter options work (`--help`).
 | `src/plugin.rs` | `MetaPlugin` subclassing glue + the gnutshell shell |
 | `src/background.rs` | Desktop background: settings, picture loading |
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
-| `src/switcher.rs` | Alt+Tab window switcher |
+| `src/switcher.rs` | Alt+Tab keybindings and timing |
 | `src/pins.rs` | Pinned apps: storage and launching |
 | `src/shortcuts.rs` | Pinned apps on the top bar |
 | `src/window_menu.rs` | Window menu: always on top, workspace moves |
 | `src/taskbar.rs` | Taskbar with window previews |
-| `src/overview.rs` | Window overview tiles and their scrollbar |
+| `src/overview.rs` | Window tiles for the overview and Alt+Tab, with scrollbar |
 | `src/windows.rs` | Window list, change tracking and thumbnails for both |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |

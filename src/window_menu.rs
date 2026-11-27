@@ -68,9 +68,10 @@ fn entry(action: Action, label: &'static str, enabled: bool, checked: bool) -> E
 fn pin_entries(taskbar: bool, top_bar: bool, enabled: bool) -> [Entry; 2] {
     let taskbar_label = if taskbar { "Unpin from Taskbar" } else { "Pin to Taskbar" };
     let top_bar_label = if top_bar { "Unpin from Top Bar" } else { "Pin to Top Bar" };
+    // In the order the bars have on screen.
     [
-        Entry { new_group: true, ..entry(Action::TogglePin(Place::Taskbar), taskbar_label, enabled, false) },
-        entry(Action::TogglePin(Place::TopBar), top_bar_label, enabled, false),
+        Entry { new_group: true, ..entry(Action::TogglePin(Place::TopBar), top_bar_label, enabled, false) },
+        entry(Action::TogglePin(Place::Taskbar), taskbar_label, enabled, false),
     ]
 }
 

@@ -153,6 +153,8 @@ pub const COGL_PIXEL_FORMAT_RGBA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7);
 /// `GlyMemoryFormatSelection` and `GlyMemoryFormat`
 pub const GLY_MEMORY_SELECTION_R8G8B8A8_PREMULTIPLIED: c_uint = 1 << 2;
 pub const GLY_MEMORY_R8G8B8A8_PREMULTIPLIED: c_int = 2;
+pub const CLUTTER_SHIFT_MASK: c_uint = 1 << 0;
+pub const CLUTTER_CONTROL_MASK: c_uint = 1 << 2;
 pub const CLUTTER_SCROLL_UP: c_int = 0;
 pub const CLUTTER_SCROLL_DOWN: c_int = 1;
 pub const CLUTTER_SCROLL_SMOOTH: c_int = 4;
@@ -399,6 +401,7 @@ unsafe extern "C" {
 
     // clutter-event.h
     pub fn clutter_event_get_scroll_direction(event: *const ClutterEvent) -> c_int;
+    pub fn clutter_event_get_state(event: *const ClutterEvent) -> c_uint;
     pub fn clutter_event_get_button(event: *const ClutterEvent) -> u32;
     pub fn clutter_event_get_scroll_delta(event: *const ClutterEvent, dx: *mut c_double, dy: *mut c_double);
     pub fn clutter_event_is_pointer_emulated(event: *const ClutterEvent) -> gboolean;

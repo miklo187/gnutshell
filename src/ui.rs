@@ -152,6 +152,14 @@ pub fn key_symbol(event: *const ffi::ClutterEvent) -> u32 {
     if event.is_null() { 0 } else { unsafe { ffi::clutter_event_get_key_symbol(event) } }
 }
 
+/// Whether Shift or Ctrl was held for the event.
+pub fn wants_new_window(event: *const ffi::ClutterEvent) -> bool {
+    !event.is_null()
+        && unsafe { ffi::clutter_event_get_state(event) }
+            & (ffi::CLUTTER_SHIFT_MASK | ffi::CLUTTER_CONTROL_MASK)
+            != 0
+}
+
 /// An event's position in stage coordinates.
 pub fn event_coords(event: *const ffi::ClutterEvent) -> Option<(f32, f32)> {
     if event.is_null() {

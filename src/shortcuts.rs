@@ -138,7 +138,7 @@ impl TopShortcuts {
         unsafe { gobj(button) }.connect_local("button-press-event", false, move |args| {
             let event = ui::event_arg(args);
             match unsafe { ffi::clutter_event_get_button(event) } {
-                1 => with(&weak, |s| s.click(&id)),
+                1 => with(&weak, |s| s.click(&id, ui::wants_new_window(event))),
                 3 => with(&weak, |s| {
                     let handler = s.state.borrow().menu.clone();
                     if let (Some(handler), Some((x, _))) = (handler, ui::event_coords(event)) {
@@ -154,9 +154,16 @@ impl TopShortcuts {
     }
 
     /// Start the app, or go to the window of it used last, or minimize that
-    /// window if it has the focus already.
-    fn click(&self, id: &str) {
+    /// window if it has the focus already. With `new_window`, always open
+    /// another window.
+    fn click(&self, id: &str, new_window: bool) {
         if crate::lockscreen::is_locked() {
+            return;
+        }
+        if new_window {
+            if let Some(app) = pins::app(id) {
+                pins::launch(self.display, &app, true);
+            }
             return;
         }
         let own: Vec<glib::Object> = windows::recent(self.display)
