@@ -378,6 +378,7 @@ unsafe extern "C" {
     pub fn clutter_actor_set_position(actor: *mut ClutterActor, x: c_float, y: c_float);
     pub fn clutter_actor_set_size(actor: *mut ClutterActor, w: c_float, h: c_float);
     pub fn clutter_actor_get_x(actor: *mut ClutterActor) -> c_float;
+    pub fn clutter_actor_get_y(actor: *mut ClutterActor) -> c_float;
     pub fn clutter_actor_get_width(actor: *mut ClutterActor) -> c_float;
     pub fn clutter_actor_get_height(actor: *mut ClutterActor) -> c_float;
     pub fn clutter_actor_set_background_color(actor: *mut ClutterActor, color: *const CoglColor);

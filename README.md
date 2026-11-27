@@ -59,6 +59,18 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   monitors or for screenshots. An app that draws its own title bar and does not
   ask for this menu has it only through the other two ways. Tiles in the
   window overview have no menu.
+- Grouped taskbar, off by default: right-click an empty part of the taskbar and
+  switch "Group Windows" on. The bar then has one icon per app, over a line
+  that is blue when the app has the focus and in two pieces when it has several
+  windows; pinned apps stay first. Rest the pointer on an icon to see all of
+  the app's windows side by side: click one to go to it, ✕ or a middle click to
+  close it, right-click for its window menu. A click on the icon focuses or
+  minimizes the app's only window, or shows the choice if there are several.
+  Right-click an icon with several windows for Open New Window, the pin entries
+  and Close All Windows (the menus of top bar shortcuts and launcher entries
+  have the latter too). Windows that match no desktop file are not grouped.
+  Many windows make narrow previews; they do not scroll. The setting is stored
+  with the pins.
 - Window overview: the four-square button at the left of the panel shows every
   open window, from all workspaces, as a tile with a live picture. Click a tile
   or use the arrow keys and Enter; Escape or a click outside closes it. When
@@ -338,10 +350,10 @@ All mutter options work (`--help`).
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab keybindings and timing |
 | `src/drag.rs` | Dragging pins to reorder them |
-| `src/pins.rs` | Pinned apps: storage and launching |
+| `src/pins.rs` | Pinned apps and the grouping setting: storage and launching |
 | `src/shortcuts.rs` | Pinned apps on the top bar |
 | `src/window_menu.rs` | Window menu: always on top, workspace moves |
-| `src/taskbar.rs` | Taskbar with window previews |
+| `src/taskbar.rs` | Taskbar, plain or grouped, with window previews |
 | `src/overview.rs` | Window tiles for the overview and Alt+Tab, with scrollbar |
 | `src/windows.rs` | Window list, change tracking and thumbnails for both |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |

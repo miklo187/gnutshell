@@ -21,8 +21,10 @@ pub fn id(window: &glib::Object) -> u64 {
 /// What a menu was asked for.
 pub enum MenuTarget {
     Window(glib::Object),
-    /// A pinned app's shortcut, by desktop file id.
+    /// A pinned app's shortcut or a group of its windows, by desktop file id.
     App(String),
+    /// The empty part of the taskbar.
+    Taskbar,
 }
 
 /// The windows of all workspaces that belong in a window list, oldest first,

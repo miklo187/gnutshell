@@ -1,5 +1,5 @@
-//! Apps pinned as shortcuts to the taskbar and to the top bar, kept in
-//! `~/.config/gnutshell/pinned.ini`.
+//! Apps pinned as shortcuts to the taskbar and to the top bar, and whether the
+//! taskbar groups windows, kept in `~/.config/gnutshell/pinned.ini`.
 //!
 //! This is gnutshell's own list: `org.gnome.shell favorite-apps` would fill
 //! the bars with GNOME's defaults and change the dash of a GNOME session.
@@ -9,11 +9,13 @@ use crate::icons;
 use crate::ui;
 use crate::windows;
 use gio::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
 const GROUP: &str = "pinned";
+const TASKBAR_GROUP: &str = "taskbar";
+const GROUPING_KEY: &str = "group-windows";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Place {
@@ -60,6 +62,8 @@ pub struct Pins {
     path: PathBuf,
     /// Desktop file ids in the order they were pinned, indexed by `Place`.
     lists: RefCell<[Vec<String>; 2]>,
+    /// Whether the taskbar shows one entry per app.
+    grouped: Cell<bool>,
     listener: RefCell<Option<Listener>>,
 }
 
@@ -77,7 +81,13 @@ impl Pins {
                 .map(|list| list.iter().map(|s| s.to_string()).filter(|s| !s.is_empty()).collect())
                 .unwrap_or_default()
         });
-        Rc::new(Self { path, lists: RefCell::new(lists), listener: RefCell::new(None) })
+        let grouped = file.boolean(TASKBAR_GROUP, GROUPING_KEY).unwrap_or(false);
+        Rc::new(Self {
+            path,
+            lists: RefCell::new(lists),
+            grouped: Cell::new(grouped),
+            listener: RefCell::new(None),
+        })
     }
 
     /// `listener` runs after every change.
@@ -108,8 +118,21 @@ impl Pins {
         }
     }
 
+    pub fn grouped(&self) -> bool {
+        self.grouped.get()
+    }
+
+    pub fn set_grouped(&self, grouped: bool) {
+        self.grouped.set(grouped);
+        self.changed();
+    }
+
     fn set(&self, place: Place, list: Vec<String>) {
         self.lists.borrow_mut()[place as usize] = list;
+        self.changed();
+    }
+
+    fn changed(&self) {
         self.save();
         let listener = self.listener.borrow().clone();
         if let Some(listener) = listener {
@@ -125,6 +148,7 @@ impl Pins {
             let value: String = list.iter().map(|id| format!("{id};")).collect();
             file.set_string(GROUP, place.key(), &value);
         }
+        file.set_boolean(TASKBAR_GROUP, GROUPING_KEY, self.grouped.get());
         let result = self
             .path
             .parent()

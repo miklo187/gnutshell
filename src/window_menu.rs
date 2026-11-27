@@ -30,6 +30,10 @@ pub enum Action {
     Close,
     /// Start a shortcut's app.
     Open,
+    /// Close every window of a shortcut's app.
+    CloseAll,
+    /// Switch the taskbar between one entry per window and per app.
+    ToggleGrouping,
     TogglePin(Place),
 }
 
@@ -76,12 +80,20 @@ fn pin_entries(taskbar: bool, top_bar: bool, enabled: bool) -> [Entry; 2] {
     ]
 }
 
-/// The menu of a shortcut.
-pub fn shortcut_entries(running: bool, taskbar: bool, top_bar: bool) -> Vec<Entry> {
-    let open = if running { "Open New Window" } else { "Open" };
+/// The menu of a shortcut or group, whose app has `windows` windows.
+pub fn shortcut_entries(windows: usize, taskbar: bool, top_bar: bool) -> Vec<Entry> {
+    let open = if windows > 0 { "Open New Window" } else { "Open" };
     let mut out = vec![entry(Action::Open, open, true, false)];
     out.extend(pin_entries(taskbar, top_bar, true));
+    if windows > 1 {
+        out.push(Entry { new_group: true, ..entry(Action::CloseAll, "Close All Windows", true, false) });
+    }
     out
+}
+
+/// The menu of the empty part of the taskbar.
+fn taskbar_entries(grouped: bool) -> Vec<Entry> {
+    vec![entry(Action::ToggleGrouping, "Group Windows", true, grouped)]
 }
 
 /// The menu of a window.
@@ -182,7 +194,12 @@ fn perform(display: *mut MetaDisplay, window: &glib::Object, action: Action) {
                 ffi::meta_window_change_workspace_by_index(w, now.workspace + 1, 0)
             }
             // Not about the window's state; `choose` handles these.
-            Action::MoveLeft | Action::MoveRight | Action::Open | Action::TogglePin(_) => {}
+            Action::MoveLeft
+            | Action::MoveRight
+            | Action::Open
+            | Action::CloseAll
+            | Action::ToggleGrouping
+            | Action::TogglePin(_) => {}
             Action::Close => {
                 ffi::meta_window_delete(w, ffi::meta_display_get_current_time_roundtrip(display))
             }
@@ -259,12 +276,11 @@ impl WindowMenu {
                 (Some(window), app, entries)
             }
             MenuTarget::App(id) => {
-                let running = windows::list(self.display)
-                    .iter()
-                    .any(|w| pins::app_id_of(w).as_deref() == Some(id.as_str()));
+                let count = self.windows_of(&id).len();
                 let (taskbar, top_bar) = pinned(&id);
-                (None, Some(id), shortcut_entries(running, taskbar, top_bar))
+                (None, Some(id), shortcut_entries(count, taskbar, top_bar))
             }
+            MenuTarget::Taskbar => (None, None, taskbar_entries(self.pins.grouped())),
         };
         let height = 2.0 * PADDING
             + entries.len() as f32 * ROW_HEIGHT
@@ -369,6 +385,12 @@ impl WindowMenu {
 
     // ------------------------------------------------------------------ internals
 
+    fn windows_of(&self, app: &str) -> Vec<glib::Object> {
+        let mut list = windows::list(self.display);
+        list.retain(|w| pins::app_id_of(w).as_deref() == Some(app));
+        list
+    }
+
     /// The monitor containing the point, or else the primary one.
     fn monitor_at(&self, x: f32, y: f32) -> MtkRectangle {
         unsafe {
@@ -444,6 +466,13 @@ impl WindowMenu {
                     pins::launch(self.display, &app, true);
                 }
             }
+            (Action::CloseAll, _, Some(id)) => {
+                let time = unsafe { ffi::meta_display_get_current_time_roundtrip(self.display) };
+                for window in self.windows_of(&id) {
+                    unsafe { ffi::meta_window_delete(windows::ptr(&window), time) };
+                }
+            }
+            (Action::ToggleGrouping, _, _) => self.pins.set_grouped(!self.pins.grouped()),
             (action, Some(window), _) => perform(self.display, &window, action),
             _ => {}
         }
@@ -527,8 +556,11 @@ mod tests {
         assert_eq!(pin(pinned, Place::Taskbar).label, "Unpin from Taskbar");
         assert_eq!(pin(pinned, Place::TopBar).label, "Pin to Top Bar");
         assert!(!pin(Facts { pinned: None, ..NORMAL }, Place::TopBar).enabled);
-        assert_eq!(shortcut_entries(false, true, false)[0].label, "Open");
-        assert_eq!(shortcut_entries(true, true, false)[0].label, "Open New Window");
+        assert_eq!(shortcut_entries(0, true, false)[0].label, "Open");
+        assert_eq!(shortcut_entries(1, true, false)[0].label, "Open New Window");
+        let closes_all = |n| shortcut_entries(n, true, false).iter().any(|e| e.action == Action::CloseAll);
+        assert!(!closes_all(1));
+        assert!(closes_all(2));
     }
 
     #[test]
