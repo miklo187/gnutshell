@@ -298,7 +298,8 @@ impl Workspaces {
                 x += w + DOT_GAP;
             }
             ffi::clutter_actor_set_size(self.indicator, x - DOT_GAP + INDICATOR_PADDING, height);
-            ffi::clutter_actor_set_position(self.indicator, 0.0, 0.0);
+            // Right of the launcher button.
+            ffi::clutter_actor_set_position(self.indicator, crate::launcher::PANEL_BUTTON_WIDTH, 0.0);
             ffi::clutter_actor_show(self.indicator);
         }
     }

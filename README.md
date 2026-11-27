@@ -91,7 +91,8 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   profile, keeping the current input if possible. Input devices and per-app
   volumes are not in the menu. Escape or a click outside closes it.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
-- App launcher: press Super to open a search field over a dimmed screen. Type to
+- App launcher: press Super, or click the three-bar button at the left end of
+  the panel, to open a search field over a dimmed screen. Type to
   filter installed apps. Scroll with the mouse wheel or touchpad; use Up/Down or Tab to select, and Enter or a click to
   launch. Escape, Super or a click outside the box closes it. Apps launch through
   mutter's `MetaLaunchContext`, so they get the correct `WAYLAND_DISPLAY`/`DISPLAY`
@@ -121,7 +122,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   off, every shortcut is blocked except VT switching, layout switching and
   media keys that gsd allows on the lock screen, and polkit prompts wait.
   logind's LockedHint and `ActiveChanged` are kept up to date.
-- Workspaces: a panel indicator on the left (one dot per workspace, the
+- Workspaces: a panel indicator on the left, next to the launcher button (one dot per workspace, the
   active one wider; click a dot to switch, scroll over it to step), and a
   slide animation when switching (Super+PageUp/PageDown, Ctrl+Alt+arrows and
   the other mutter workspace shortcuts). With `org.gnome.mutter

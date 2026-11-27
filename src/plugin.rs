@@ -315,6 +315,12 @@ impl imp::GnutshellPlugin {
             let clock = ffi::clutter_text_new_full(CLOCK_FONT.as_ptr(), c"".as_ptr(), &TEXT_COLOR);
             ffi::clutter_actor_add_child(panel, clock);
             ffi::clutter_actor_add_child(stage, panel);
+            let weak = self.obj().downgrade();
+            crate::launcher::add_panel_button(panel, PANEL_HEIGHT as f32, move || {
+                if let Some(plugin) = weak.upgrade() {
+                    plugin.imp().toggle_launcher();
+                }
+            });
 
             *self.shell.borrow_mut() = Some(Shell { display, panel, clock, background });
             crate::icons::watch_theme_changes();
@@ -661,24 +667,31 @@ impl imp::GnutshellPlugin {
         workspace_manager.connect_local("workspace-added", false, relayout.clone());
         display_obj.connect_local("in-fullscreen-changed", false, relayout);
 
-        // Super key: toggle the built-in launcher, or run $GNUTSHELL_LAUNCHER.
+        // Super key: toggle the launcher.
         let weak = self.obj().downgrade();
         display_obj.connect_local("overlay-key", false, move |_| {
-            if crate::lockscreen::is_locked() {
-                return None;
-            }
-            if let Ok(cmd) = std::env::var("GNUTSHELL_LAUNCHER") {
-                if let Err(e) = glib::spawn_command_line_async(cmd.as_str()) {
-                    glib::g_warning!("gnutshell", "failed to spawn launcher '{cmd}': {e}");
-                }
-            } else if let Some(p) = weak.upgrade() {
-                let launcher = p.imp().launcher.borrow().clone();
-                if let Some(l) = launcher {
-                    l.toggle();
-                }
+            if let Some(p) = weak.upgrade() {
+                p.imp().toggle_launcher();
             }
             None
         });
+    }
+
+    /// Toggle the built-in launcher, or run $GNUTSHELL_LAUNCHER.
+    fn toggle_launcher(&self) {
+        if crate::lockscreen::is_locked() {
+            return;
+        }
+        if let Ok(cmd) = std::env::var("GNUTSHELL_LAUNCHER") {
+            if let Err(e) = glib::spawn_command_line_async(cmd.as_str()) {
+                glib::g_warning!("gnutshell", "failed to spawn launcher '{cmd}': {e}");
+            }
+        } else {
+            let launcher = self.launcher.borrow().clone();
+            if let Some(l) = launcher {
+                l.toggle();
+            }
+        }
     }
 
     fn update_clock(&self) {
