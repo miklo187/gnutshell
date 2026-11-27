@@ -1,4 +1,4 @@
-//! The apps pinned to the top bar: an icon each, right of the panel buttons.
+//! The apps pinned to the top bar: an icon each, right of the workspace dots.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay};
 use crate::pins::{self, Pins, Place};
@@ -13,9 +13,8 @@ const ICON_SIZE: f32 = 20.0;
 /// The line under the icon of a running app.
 const MARK_WIDTH: f32 = 12.0;
 const MARK_HEIGHT: f32 = 2.0;
-/// Width kept free left of the panel's middle for the workspace dots and the
-/// clock.
-const RESERVED: f32 = 250.0;
+/// Width kept free left of the panel's middle for the clock and its mark.
+const RESERVED: f32 = 100.0;
 
 /// How many shortcuts fit right of `left` in a panel `width` wide.
 fn room(width: f32, left: f32) -> usize {
@@ -28,7 +27,8 @@ type MenuHandler = Rc<dyn Fn(MenuTarget, f32, f32)>;
 struct State {
     /// What the buttons were built from: app ids and whether they run.
     drawn: Option<(Vec<(String, bool)>, usize)>,
-    width: f32,
+    /// Where the buttons start in the panel.
+    left: f32,
     panel_width: f32,
     menu: Option<MenuHandler>,
 }
@@ -38,7 +38,6 @@ pub struct TopShortcuts {
     stage: *mut ClutterActor,
     container: *mut ClutterActor,
     pins: Rc<Pins>,
-    left: f32,
     height: f32,
     state: RefCell<State>,
 }
@@ -49,16 +48,14 @@ impl TopShortcuts {
         stage: *mut ClutterActor,
         panel: *mut ClutterActor,
         pins: Rc<Pins>,
-        left: f32,
         height: f32,
     ) -> Rc<Self> {
         let container = unsafe {
             let container = ffi::clutter_actor_new();
-            ffi::clutter_actor_set_position(container, left, 0.0);
             ffi::clutter_actor_add_child(panel, container);
             container
         };
-        Rc::new(Self { display, stage, container, pins, left, height, state: RefCell::default() })
+        Rc::new(Self { display, stage, container, pins, height, state: RefCell::default() })
     }
 
     /// `handler` runs on a right click on a shortcut.
@@ -70,9 +67,12 @@ impl TopShortcuts {
         self.state.borrow_mut().panel_width = width;
     }
 
-    /// How much of the panel the shortcuts take.
-    pub fn width(&self) -> f32 {
-        self.state.borrow().width
+    /// Put the buttons at `left` in the panel.
+    pub fn set_left(self: &Rc<Self>, left: f32) {
+        self.state.borrow_mut().left = left;
+        unsafe { ffi::clutter_actor_set_position(self.container, left, 0.0) };
+        // How many fit may have changed.
+        self.refresh();
     }
 
     /// Bring the buttons up to date. They are rebuilt only on change, so that
@@ -80,7 +80,10 @@ impl TopShortcuts {
     pub fn refresh(self: &Rc<Self>) {
         let apps = self.pins.apps(Place::TopBar);
         let running: Vec<String> = windows::list(self.display).iter().filter_map(pins::app_id_of).collect();
-        let shown = room(self.state.borrow().panel_width, self.left).min(apps.len());
+        let shown = {
+            let state = self.state.borrow();
+            room(state.panel_width, state.left).min(apps.len())
+        };
         let key: Vec<(String, bool)> =
             apps.iter().map(|(id, _)| (id.clone(), running.contains(id))).collect();
         if self.state.borrow().drawn.as_ref() == Some(&(key.clone(), shown)) {
@@ -94,9 +97,7 @@ impl TopShortcuts {
         }
         let width = shown as f32 * BUTTON_WIDTH;
         unsafe { ffi::clutter_actor_set_size(self.container, width, self.height) };
-        let mut state = self.state.borrow_mut();
-        state.drawn = Some((key, shown));
-        state.width = width;
+        self.state.borrow_mut().drawn = Some((key, shown));
     }
 
     fn new_button(
@@ -201,8 +202,9 @@ mod tests {
 
     #[test]
     fn shortcuts_stay_clear_of_the_clock() {
-        assert_eq!(room(1280.0, 72.0), 9);
-        assert!(room(1920.0, 72.0) > room(1280.0, 72.0));
-        assert_eq!(room(400.0, 72.0), 0);
+        assert_eq!(room(1280.0, 132.0), 12);
+        assert!(room(1920.0, 132.0) > room(1280.0, 132.0));
+        assert!(room(1280.0, 200.0) < room(1280.0, 132.0));
+        assert_eq!(room(400.0, 132.0), 0);
     }
 }

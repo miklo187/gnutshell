@@ -33,7 +33,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   taskbar, pinned apps come first, in the order pinned. Without a window, a
   pinned app is an icon that starts it (hover shows its name); while it has
   windows, their entries take that place. On the top bar, pinned apps are
-  icons right of the panel buttons, with a line under those that are running.
+  icons right of the workspace dots, with a line under those that are running.
   A click starts the app, focuses the window of it used last, or minimizes that
   window if it already has the focus. Shift+click or Ctrl+click on a top bar
   shortcut or a taskbar entry opens a new window of the app, through its
@@ -43,7 +43,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   `~/.config/gnutshell/pinned.ini`; it is not GNOME's dash favorites. Apps
   can't be pinned from the app launcher, shortcuts can't be reordered by
   dragging, and a window that matches no desktop file can't be pinned. Top bar
-  shortcuts that would reach the workspace dots and clock are not shown.
+  shortcuts that would reach the clock are not shown.
 - Window menu: right-click a title bar, press Alt+Space
   (`activate-window-menu`) or right-click a taskbar entry. It offers Minimize,
   Maximize/Restore, Always on Top, Always on Visible Workspace, Move to

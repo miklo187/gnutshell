@@ -66,8 +66,9 @@ pub const PANEL_BUTTONS_WIDTH: f32 =
 pub struct Workspaces {
     display: *mut MetaDisplay,
     indicator: *mut ClutterActor,
-    /// Where the indicator starts in the panel.
-    left: Cell<f32>,
+    /// Told where the indicator ends in the panel, when that changes.
+    end_handler: RefCell<Option<Rc<dyn Fn(f32)>>>,
+    end: Cell<f32>,
     mutter: Option<gio::Settings>,
     state: RefCell<State>,
 }
@@ -90,8 +91,14 @@ impl Workspaces {
             let indicator = ffi::clutter_actor_new();
             ffi::clutter_actor_set_reactive(indicator, 1);
             ffi::clutter_actor_add_child(panel, indicator);
-            let left = Cell::new(PANEL_BUTTONS_WIDTH);
-            Rc::new(Self { display, indicator, left, mutter, state: RefCell::default() })
+            Rc::new(Self {
+                display,
+                indicator,
+                end_handler: RefCell::default(),
+                end: Cell::new(PANEL_BUTTONS_WIDTH),
+                mutter,
+                state: RefCell::default(),
+            })
         };
         ws.connect_signals();
         ws.track_workspaces();
@@ -277,6 +284,7 @@ impl Workspaces {
             ffi::clutter_actor_destroy_all_children(self.indicator);
             if n < 2 {
                 ffi::clutter_actor_hide(self.indicator);
+                self.report_end(PANEL_BUTTONS_WIDTH);
                 return;
             }
             let height = ffi::clutter_actor_get_height(ffi::clutter_actor_get_parent(self.indicator));
@@ -305,14 +313,27 @@ impl Workspaces {
                 x += w + DOT_GAP;
             }
             ffi::clutter_actor_set_size(self.indicator, x - DOT_GAP + INDICATOR_PADDING, height);
-            ffi::clutter_actor_set_position(self.indicator, self.left.get(), 0.0);
+            // Right of the launcher and overview buttons.
+            ffi::clutter_actor_set_position(self.indicator, PANEL_BUTTONS_WIDTH, 0.0);
             ffi::clutter_actor_show(self.indicator);
+            self.report_end(PANEL_BUTTONS_WIDTH + x - DOT_GAP + INDICATOR_PADDING);
         }
     }
 
-    pub fn set_left(&self, left: f32) {
-        self.left.set(left);
-        unsafe { ffi::clutter_actor_set_position(self.indicator, left, 0.0) };
+    /// `handler` runs now and whenever the indicator's right end moves.
+    pub fn set_end_handler(&self, handler: impl Fn(f32) + 'static) {
+        let handler: Rc<dyn Fn(f32)> = Rc::new(handler);
+        *self.end_handler.borrow_mut() = Some(handler.clone());
+        handler(self.end.get());
+    }
+
+    fn report_end(&self, end: f32) {
+        if self.end.replace(end) != end {
+            let handler = self.end_handler.borrow().clone();
+            if let Some(handler) = handler {
+                handler(end);
+            }
+        }
     }
 
     pub fn relayout(self: &Rc<Self>) {

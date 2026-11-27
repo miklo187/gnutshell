@@ -400,7 +400,6 @@ impl imp::GnutshellPlugin {
                 stage,
                 panel,
                 pins.clone(),
-                crate::workspaces::PANEL_BUTTONS_WIDTH,
                 PANEL_HEIGHT as f32,
             );
             let taskbar = Taskbar::new(display, stage, pins.clone(), &PANEL_COLOR);
@@ -503,7 +502,18 @@ impl imp::GnutshellPlugin {
                 }),
             );
             *self.lock_screen.borrow_mut() = Some(lock);
-            *self.workspaces.borrow_mut() = Some(crate::workspaces::Workspaces::new(display, panel));
+            let workspaces = crate::workspaces::Workspaces::new(display, panel);
+            let shortcuts = self.shell.borrow().as_ref().map(|s| s.shortcuts.clone());
+            if let Some(shortcuts) = shortcuts {
+                // The top bar shortcuts sit right of the dots.
+                let weak = Rc::downgrade(&shortcuts);
+                workspaces.set_end_handler(move |end| {
+                    if let Some(shortcuts) = weak.upgrade() {
+                        shortcuts.set_left(end);
+                    }
+                });
+            }
+            *self.workspaces.borrow_mut() = Some(workspaces);
 
             self.connect_signals(display);
             self.update_clock();
@@ -826,14 +836,10 @@ impl imp::GnutshellPlugin {
         });
     }
 
-    /// Update the top bar shortcuts and move what is right of them.
     fn refresh_shortcuts(&self) {
         let shortcuts = self.shell.borrow().as_ref().map(|s| s.shortcuts.clone());
-        let Some(shortcuts) = shortcuts else { return };
-        shortcuts.refresh();
-        let workspaces = self.workspaces.borrow().clone();
-        if let Some(workspaces) = workspaces {
-            workspaces.set_left(crate::workspaces::PANEL_BUTTONS_WIDTH + shortcuts.width());
+        if let Some(shortcuts) = shortcuts {
+            shortcuts.refresh();
         }
     }
 
