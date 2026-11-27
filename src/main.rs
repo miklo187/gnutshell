@@ -5,6 +5,7 @@
 //! loop. No GJS is involved.
 
 mod background;
+mod drag;
 mod ffi;
 mod icons;
 mod keyboard;

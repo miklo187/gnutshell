@@ -155,6 +155,7 @@ pub const GLY_MEMORY_SELECTION_R8G8B8A8_PREMULTIPLIED: c_uint = 1 << 2;
 pub const GLY_MEMORY_R8G8B8A8_PREMULTIPLIED: c_int = 2;
 pub const CLUTTER_SHIFT_MASK: c_uint = 1 << 0;
 pub const CLUTTER_CONTROL_MASK: c_uint = 1 << 2;
+pub const CLUTTER_BUTTON1_MASK: c_uint = 1 << 8;
 pub const CLUTTER_SCROLL_UP: c_int = 0;
 pub const CLUTTER_SCROLL_DOWN: c_int = 1;
 pub const CLUTTER_SCROLL_SMOOTH: c_int = 4;

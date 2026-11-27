@@ -43,8 +43,11 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   starting it again does. Right-click a shortcut for Open (Open New
   Window while it runs) and the unpin entries. The list is stored in
   `~/.config/gnutshell/pinned.ini`; it is not GNOME's dash favorites.
-  Shortcuts can't be reordered by
-  dragging, and a window that matches no desktop file can't be pinned. Top bar
+  Drag a pinned icon, or a window entry of a pinned app, along its bar to
+  reorder; a line shows where it will land, and releasing it far from the bar
+  changes nothing. The two bars keep separate orders. Windows of apps that are
+  not pinned can't be moved, and nothing is dragged from one bar to the other.
+  A window that matches no desktop file can't be pinned. Top bar
   shortcuts that would reach the clock are not shown.
 - Window menu: right-click a title bar, press Alt+Space
   (`activate-window-menu`) or right-click a taskbar entry. It offers Minimize,
@@ -334,6 +337,7 @@ All mutter options work (`--help`).
 | `src/background.rs` | Desktop background: settings, picture loading |
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab keybindings and timing |
+| `src/drag.rs` | Dragging pins to reorder them |
 | `src/pins.rs` | Pinned apps: storage and launching |
 | `src/shortcuts.rs` | Pinned apps on the top bar |
 | `src/window_menu.rs` | Window menu: always on top, workspace moves |

@@ -41,6 +41,19 @@ fn toggled(list: &[String], id: &str) -> Vec<String> {
     out
 }
 
+/// `list` with `id` moved before `before`, or to the end. Unchanged if either
+/// is not on it.
+fn moved(list: &[String], id: &str, before: Option<&str>) -> Vec<String> {
+    let known = |wanted: &str| list.iter().any(|i| i == wanted);
+    if !known(id) || before.is_some_and(|b| b == id || !known(b)) {
+        return list.to_vec();
+    }
+    let mut out: Vec<String> = list.iter().filter(|i| *i != id).cloned().collect();
+    let at = before.and_then(|b| out.iter().position(|i| i == b)).unwrap_or(out.len());
+    out.insert(at, id.to_owned());
+    out
+}
+
 type Listener = Rc<dyn Fn()>;
 
 pub struct Pins {
@@ -84,6 +97,18 @@ impl Pins {
 
     pub fn toggle(&self, place: Place, id: &str) {
         let list = toggled(&self.lists.borrow()[place as usize], id);
+        self.set(place, list);
+    }
+
+    /// Move the pinned `id` before the pinned `before`, or to the end.
+    pub fn reorder(&self, place: Place, id: &str, before: Option<&str>) {
+        let list = moved(&self.lists.borrow()[place as usize], id, before);
+        if list != self.lists.borrow()[place as usize] {
+            self.set(place, list);
+        }
+    }
+
+    fn set(&self, place: Place, list: Vec<String>) {
         self.lists.borrow_mut()[place as usize] = list;
         self.save();
         let listener = self.listener.borrow().clone();
@@ -136,7 +161,18 @@ pub fn launch(display: *mut MetaDisplay, app: &gio_unix::DesktopAppInfo, new_win
 
 #[cfg(test)]
 mod tests {
-    use super::toggled;
+    use super::{moved, toggled};
+
+    #[test]
+    fn moves_a_pin_before_another_or_to_the_end() {
+        let list: Vec<String> = ["a", "hidden", "b", "c"].map(str::to_owned).to_vec();
+        assert_eq!(moved(&list, "c", Some("a")), ["c", "a", "hidden", "b"]);
+        assert_eq!(moved(&list, "a", Some("c")), ["hidden", "b", "a", "c"]);
+        assert_eq!(moved(&list, "a", None), ["hidden", "b", "c", "a"]);
+        assert_eq!(moved(&list, "b", Some("b")), list);
+        assert_eq!(moved(&list, "x", None), list);
+        assert_eq!(moved(&list, "a", Some("x")), list);
+    }
 
     #[test]
     fn pins_at_the_end_and_unpins() {

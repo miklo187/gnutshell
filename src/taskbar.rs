@@ -3,7 +3,9 @@
 //!
 //! Pinned apps come first, in pin order. A pinned app without a window is an
 //! icon that starts it; while it has windows, their entries take that place.
+//! Dragging a pinned app's icon or entry along the bar changes the pin order.
 
+use crate::drag::{self, Press, Span};
 use crate::ffi::{self, ClutterActor, MetaDisplay};
 use crate::pins::{self, Pins, Place};
 use crate::ui::{self, gobj};
@@ -88,6 +90,8 @@ struct Item {
     key: Key,
     content: Content,
     actor: *mut ClutterActor,
+    /// The id of its app if that is pinned here.
+    pin: Option<String>,
     /// What the actor was drawn from, to redraw only on change.
     drawn: (String, f32),
     /// Position and width inside the bar.
@@ -101,6 +105,7 @@ type MenuHandler = Rc<dyn Fn(MenuTarget, f32, f32)>;
 struct State {
     menu: Option<MenuHandler>,
     items: Vec<Item>,
+    press: Option<Press<Key>>,
     /// Origin of the bar in stage coordinates, and its width.
     geometry: (f32, f32, f32),
     /// The entry under the pointer.
@@ -115,6 +120,8 @@ pub struct Taskbar {
     stage: *mut ClutterActor,
     bar: *mut ClutterActor,
     preview: *mut ClutterActor,
+    /// Shows where a dragged pin will land.
+    marker: *mut ClutterActor,
     pins: Rc<Pins>,
     state: RefCell<State>,
 }
@@ -131,13 +138,14 @@ impl Taskbar {
             ffi::clutter_actor_set_background_color(bar, color);
             ffi::clutter_actor_set_reactive(bar, 1);
             ffi::clutter_actor_add_child(stage, bar);
+            let marker = drag::new_marker(bar);
 
             let preview = ffi::clutter_actor_new();
             ffi::clutter_actor_set_background_color(preview, &ui::BOX_COLOR);
             ffi::clutter_actor_hide(preview);
             ffi::clutter_actor_add_child(stage, preview);
 
-            Rc::new(Self { display, stage, bar, preview, pins, state: RefCell::default() })
+            Rc::new(Self { display, stage, bar, preview, marker, pins, state: RefCell::default() })
         }
     }
 
@@ -194,6 +202,10 @@ impl Taskbar {
         let mut items = Vec::new();
         let mut x = ITEM_MARGIN;
         for slot in slots {
+            let pin = match &slot {
+                Slot::Window(i) => window_apps[*i].clone().filter(|id| pinned_ids.contains(id)),
+                Slot::Shortcut(i) => Some(pinned_ids[*i].clone()),
+            };
             let (key, content, width) = match slot {
                 Slot::Window(i) => {
                     let window = windows[i].clone();
@@ -210,11 +222,13 @@ impl Taskbar {
                     actor: self.new_item(key.clone()),
                     key,
                     content: content.clone(),
+                    pin: None,
                     drawn: (String::new(), -1.0),
                     span: (0.0, 0.0),
                 },
             };
             item.content = content;
+            item.pin = pin;
             let (title, icon, labelled, minimized) = match &item.content {
                 Content::Window(window) => (
                     windows::title(window),
@@ -281,16 +295,108 @@ impl Taskbar {
             Some(false.to_value())
         });
         let weak = Rc::downgrade(self);
+        let own = key.clone();
         object.connect_local("button-press-event", false, move |args| {
             let event = ui::event_arg(args);
             match unsafe { ffi::clutter_event_get_button(event) } {
-                1 => with(&weak, |t| t.click(&key, ui::wants_new_window(event))),
-                3 => with(&weak, |t| t.open_menu(&key, ui::event_coords(event))),
+                1 => with(&weak, |t| t.press(own.clone(), event)),
+                3 => with(&weak, |t| t.open_menu(&own, ui::event_coords(event))),
                 _ => {}
             }
             Some(true.to_value())
         });
+        let weak = Rc::downgrade(self);
+        let own = key.clone();
+        object.connect_local("motion-event", false, move |args| {
+            with(&weak, |t| t.motion(&own, ui::event_arg(args)));
+            Some(false.to_value())
+        });
+        let weak = Rc::downgrade(self);
+        object.connect_local("button-release-event", false, move |args| {
+            let event = ui::event_arg(args);
+            if unsafe { ffi::clutter_event_get_button(event) } == 1 {
+                with(&weak, |t| t.release(&key, ui::event_coords(event)));
+            }
+            Some(true.to_value())
+        });
         actor
+    }
+
+    fn press(&self, key: Key, event: *const ffi::ClutterEvent) {
+        self.hide_preview();
+        self.state.borrow_mut().press = Press::new(key, event);
+    }
+
+    fn motion(&self, key: &Key, event: *const ffi::ClutterEvent) {
+        let Some((x, y)) = ui::event_coords(event) else { return };
+        let dragging = {
+            let mut state = self.state.borrow_mut();
+            match state.press.as_mut() {
+                Some(press) if &press.key == key && drag::button_held(event) => press.moved_to((x, y)),
+                _ => false,
+            }
+        };
+        if dragging {
+            self.hide_preview();
+            match self.drop_target(key, x, y) {
+                Some((_, _, at)) => drag::place_marker(self.marker, at, ITEM_MARGIN, HEIGHT as f32 - 2.0 * ITEM_MARGIN),
+                None => unsafe { ffi::clutter_actor_hide(self.marker) },
+            }
+        }
+    }
+
+    /// For a drag of `key` to `x`, `y` on the stage: the pinned app dragged,
+    /// the one to put it before, and where in the bar that is. `None` if the
+    /// entry is not pinned or the pointer is away from the bar.
+    fn drop_target(&self, key: &Key, x: f32, y: f32) -> Option<(String, Option<String>, f32)> {
+        let state = self.state.borrow();
+        let (bar_x, bar_y, _) = state.geometry;
+        if !drag::near_bar(y, bar_y, HEIGHT as f32) {
+            return None;
+        }
+        let id = state.items.iter().find(|i| &i.key == key)?.pin.clone()?;
+        // An app with several windows takes the room of all its entries.
+        let mut spans: Vec<Span> = Vec::new();
+        for item in &state.items {
+            let Some(pin) = &item.pin else { continue };
+            let (start, end) = (item.span.0, item.span.0 + item.span.1);
+            match spans.iter_mut().find(|s| &s.id == pin) {
+                Some(span) => span.end = end,
+                None => spans.push(Span { id: pin.clone(), start, end }),
+            }
+        }
+        let (before, at) = drag::drop_at(&spans, x - bar_x)?;
+        // Centered in the gap between two entries.
+        let at = if before.is_some() { at - ITEM_GAP / 2.0 } else { at + ITEM_GAP / 2.0 };
+        Some((id, before, at))
+    }
+
+    /// End a press: drop a dragged pin, or else click the entry if the pointer
+    /// is still on it.
+    fn release(&self, key: &Key, at: Option<(f32, f32)>) {
+        let press = self.state.borrow_mut().press.take();
+        unsafe { ffi::clutter_actor_hide(self.marker) };
+        let (Some(press), Some((x, y))) = (press, at) else { return };
+        if &press.key != key {
+            return;
+        }
+        if press.dragging {
+            if let Some((id, before, _)) = self.drop_target(key, x, y) {
+                self.pins.reorder(Place::Taskbar, &id, before.as_deref());
+            }
+            return;
+        }
+        let on_it = {
+            let state = self.state.borrow();
+            let (bar_x, bar_y, _) = state.geometry;
+            state.items.iter().find(|i| &i.key == key).is_some_and(|i| {
+                let left = bar_x + i.span.0;
+                x >= left && x < left + i.span.1 && y >= bar_y && y <= bar_y + HEIGHT as f32
+            })
+        };
+        if on_it {
+            self.click(key, press.new_window);
+        }
     }
 
     fn content(&self, key: &Key) -> Option<Content> {
@@ -404,6 +510,9 @@ impl Taskbar {
 
     /// The window's title and picture, or a pinned app's name.
     fn show_preview(&self) {
+        if self.state.borrow().press.as_ref().is_some_and(|p| p.dragging) {
+            return;
+        }
         let found = {
             let state = self.state.borrow();
             let (x, y, bar_width) = state.geometry;
