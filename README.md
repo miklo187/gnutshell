@@ -17,7 +17,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 
 ## Status
 
-Early software (0.1.0). It has been used on a single PC: CachyOS (based on Arch
+Early software (0.1.1). It has been used on a single PC: CachyOS (based on Arch
 Linux) with mutter 51.1 and one monitor at 150 % scale; connecting and
 disconnecting a real Bluetooth device works there. Several monitors and suspend
 and resume are untested, and so are other distributions. It runs only with

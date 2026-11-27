@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 (not yet released)
+## 0.1.1 (2026-11-28)
 
 ### Security
 
