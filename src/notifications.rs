@@ -378,6 +378,21 @@ impl Notifications {
         }
     }
 
+    /// A notification from the shell itself. `icon` is a theme name or a
+    /// picture's path. With no client behind it, no signals are sent.
+    pub fn notify_shell(self: &Rc<Self>, summary: &str, body: &str, icon: &str) {
+        let n = Notification {
+            id: self.assign_id(0),
+            app_name: "gnutshell".into(),
+            summary: clip(summary),
+            body: clip(body),
+            app_icon: icon.into(),
+            expire_timeout: -1,
+            ..Default::default()
+        };
+        self.add(n);
+    }
+
     /// `replaces_id` if that notification is still around, else a fresh id.
     fn assign_id(&self, replaces_id: u32) -> u32 {
         let mut state = self.state.borrow_mut();
@@ -393,6 +408,10 @@ impl Notifications {
     }
 
     fn emit(&self, destination: &str, signal: &str, body: &glib::Variant) {
+        // An empty destination is one of the shell's own notifications.
+        if destination.is_empty() {
+            return;
+        }
         let Some(connection) = self.state.borrow().connection.clone() else { return };
         if let Err(e) = connection.emit_signal(Some(destination), OBJECT_PATH, INTERFACE, signal, Some(body)) {
             glib::g_debug!("gnutshell", "could not emit {signal}: {e}");

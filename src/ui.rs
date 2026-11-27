@@ -88,11 +88,16 @@ pub fn activation_token(display: *mut MetaDisplay, timestamp: u32) -> Option<Str
 /// Put `text` on the clipboard. The shell keeps it until something else
 /// takes the clipboard. `false` if mutter could not create the source.
 pub fn set_clipboard(display: *mut MetaDisplay, text: &str) -> bool {
-    let bytes = glib::Bytes::from(text.as_bytes());
+    set_clipboard_data(display, c"text/plain;charset=utf-8", text.as_bytes())
+}
+
+/// `set_clipboard` for any one MIME type.
+pub fn set_clipboard_data(display: *mut MetaDisplay, mimetype: &CStr, data: &[u8]) -> bool {
+    let bytes = glib::Bytes::from(data);
     unsafe {
         let mut err = std::ptr::null_mut();
         let source = ffi::meta_selection_source_memory_new(
-            c"text/plain;charset=utf-8".as_ptr(),
+            mimetype.as_ptr(),
             bytes.to_glib_none().0,
             &mut err,
         );

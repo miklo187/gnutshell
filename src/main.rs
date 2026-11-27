@@ -14,6 +14,7 @@ mod osd;
 mod pam;
 mod plugin;
 mod polkit;
+mod screenshot;
 mod session;
 mod shell_dbus;
 mod switcher;

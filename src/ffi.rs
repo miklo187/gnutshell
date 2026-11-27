@@ -118,6 +118,7 @@ pub const COGL_PIXEL_FORMAT_BGRA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7) | (1 
 pub const CLUTTER_CONTENT_GRAVITY_RESIZE_ASPECT: c_int = 10;
 pub const CAIRO_FORMAT_ARGB32: c_int = 0;
 pub const CAIRO_STATUS_SUCCESS: c_int = 0;
+pub const CAIRO_FORMAT_RGB24: c_int = 1;
 pub const META_KEY_BINDING_IS_REVERSED: c_uint = 1 << 2;
 pub const CLUTTER_SCROLL_UP: c_int = 0;
 pub const CLUTTER_SCROLL_DOWN: c_int = 1;
@@ -567,6 +568,19 @@ unsafe extern "C" {
     pub fn cairo_surface_status(surface: *mut cairo_surface_t) -> c_int;
     pub fn cairo_surface_flush(surface: *mut cairo_surface_t);
     pub fn cairo_surface_destroy(surface: *mut cairo_surface_t);
+    pub fn cairo_image_surface_create_for_data(
+        data: *mut u8,
+        format: c_int, // cairo_format_t
+        width: c_int,
+        height: c_int,
+        stride: c_int,
+    ) -> *mut cairo_surface_t;
+    pub fn cairo_surface_write_to_png_stream(
+        surface: *mut cairo_surface_t,
+        write: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const u8, c_uint) -> c_int>,
+        closure: *mut std::ffi::c_void,
+    ) -> c_int;
+    pub fn clutter_event_get_coords(event: *const ClutterEvent, x: *mut c_float, y: *mut c_float);
     pub fn cairo_create(target: *mut cairo_surface_t) -> *mut cairo_t;
     pub fn cairo_destroy(cr: *mut cairo_t);
     pub fn cairo_scale(cr: *mut cairo_t, sx: c_double, sy: c_double);

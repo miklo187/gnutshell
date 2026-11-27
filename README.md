@@ -39,6 +39,15 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   not listed, nor are `transient` ones. While the list is open, new
   notifications appear in it instead of as banners. It holds up to 50 entries
   in memory, so logging out clears it. Entries have no pictures or actions.
+- Screenshots: `Print` dims the screen; drag to take that area, press Enter
+  for the whole screen or Escape to cancel. `Shift+Print` takes the whole
+  screen and `Alt+Print` the focused window. The keys come from
+  `org.gnome.shell.keybindings`. Each one saves a PNG in
+  `Pictures/Screenshots`, copies the image to the clipboard and shows a
+  notification. gnutshell also provides `org.gnome.Shell.Screenshot` for the
+  GNOME portal and gnome-screenshot. As in gnome-shell, only the portal,
+  gsd-media-keys and the owner of `org.gnome.Screenshot` may call it, and not
+  while the screen is locked. The pointer is never in the picture.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super to open a search field over a dimmed screen. Type to
   filter installed apps. Scroll with the mouse wheel or touchpad; use Up/Down or Tab to select, and Enter or a click to
@@ -159,7 +168,7 @@ Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 **Keyboard-driven test** (debug builds only): `GNUTSHELL_DEBUG_KEYS="<ms>:<tokens>"`
 types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
 characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` /
-`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `click`, `wheel-up` / `wheel-down`, and `_` (pause). `GNUTSHELL_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
+`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `click`, `press` / `release`, `wheel-up` / `wheel-down`, and `_` (pause). `GNUTSHELL_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
 
 `GNUTSHELL_DEBUG_PAM_USER=<user>` checks lock screen passwords against another
@@ -220,6 +229,7 @@ All mutter options work (`--help`).
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
 | `src/notifications/list.rs` | Notification list opened from the clock |
+| `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
 | `src/osd.rs` | Volume/brightness popup |
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
 | `src/lockscreen.rs` | Lock screen, `org.gnome.ScreenSaver`, logind lock/sleep, idle |
@@ -243,8 +253,10 @@ All mutter options work (`--help`).
   pipeline cache). The process is exiting anyway, so gnutshell skips the teardown. Set
   `GNUTSHELL_FULL_TEARDOWN=1` to run it anyway, for debugging.
 - **Only part of `org.gnome.Shell` is implemented**: accelerators, `ShowOSD`
-  and the `Mode`/`OverviewActive` properties. Screenshots, screencasts, `Eval`
-  and the extensions API are missing.
+  and the `Mode`/`OverviewActive` properties. The screencast UI, `Eval` and the
+  extensions API are missing. In the screenshot API, `PickColor` is missing,
+  `FlashArea` and the `flash` and `include_cursor` arguments do nothing, and
+  `include_frame` is ignored.
 - **Notifications:** per-app notification settings,
   sounds and `org.gtk.Notifications` are not supported (GTK apps fall back to
   `org.freedesktop.Notifications`).
