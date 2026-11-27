@@ -76,7 +76,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   logind can ask for a password through gnutshell's polkit agent (for example
   when other users are logged in).
 - Notifications: gnutshell is the `org.freedesktop.Notifications` service. A
-  banner below the panel shows the icon or image, app name, title, up to three
+  banner below the right end of the panel shows the icon or image, app name, title, up to three
   lines of text and up to three action buttons. Click the banner for the default
   action, ✕ to dismiss it, or the copy button to put the title and full body
   on the clipboard. One banner shows at a time and the rest queue.
@@ -96,23 +96,23 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   when it gets no banner because of Do Not Disturb or the app's settings.
   The lock screen, pop-up expansion and lock screen detail settings have
   nothing to act on.
-- Notification list: click the clock. It keeps notifications whose banner
-  timed out, including ones hidden by Do Not Disturb, newest first. A blue dot
-  next to the clock marks unread ones. Each entry has a copy button and ✕;
-  "Clear all" empties the list. Scroll or use Up/Down; when entries do not
-  fit, a line below says how many more there are, and a click on it moves down
-  by a screenful. Escape or a click
-  outside closes it. Dismissed, clicked and app-withdrawn notifications are
-  not listed, nor are `transient` ones. While the list is open, new
-  notifications appear in it instead of as banners. It holds up to 50 entries
-  in memory, so logging out clears it. Entries have no pictures or actions.
-- Calendar: a month view right of the notification list, in the same popup.
-  Month and day names and the first day of the week follow your `LC_TIME`
-  locale, and week numbers (ISO) show if
+- Notification list: click the bell at the right of the panel, left of the
+  keyboard layout indicator. It keeps notifications whose banner timed out,
+  including ones hidden by Do Not Disturb, newest first. The bell is blue while
+  there are unread ones, and crossed out with Do Not Disturb. Each entry has a
+  copy button and ✕; "Clear all" empties the list. Scroll or use Up/Down; when
+  entries do not fit, a line below says how many more there are, and a click on
+  it moves down by a screenful. Escape or a click outside closes it. Dismissed,
+  clicked and app-withdrawn notifications are not listed, nor are `transient`
+  ones. While the list is open, new notifications appear in it instead of as
+  banners. It holds up to 50 entries in memory, so logging out clears it.
+  Entries have no pictures or actions.
+- Calendar: click the clock for a month view. Month and day names and the first
+  day of the week follow your `LC_TIME` locale, and week numbers (ISO) show if
   `org.gnome.desktop.calendar show-weekdate` is on. Change the month with ‹ ›,
-  Left/Right or by scrolling over the calendar; click the date at the top or
-  press Home to return to today. It shows no events, and clicking a day does
-  nothing. On a monitor too narrow for both, only the list shows.
+  Left/Right or by scrolling; click the date at the top or press Home to return
+  to today. Banners wait while it is open. It shows no events, and clicking a
+  day does nothing.
 - Screenshots: `Print` dims the screen; drag to take that area, press Enter
   for the whole screen or Escape to cancel. `Shift+Print` takes the whole
   screen and `Alt+Print` the focused window. The keys come from
@@ -344,8 +344,8 @@ All mutter options work (`--help`).
 | `src/x11.rs` | Starts gnome-session's X11 services with Xwayland |
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
-| `src/notifications/list.rs` | Notification list opened from the clock |
-| `src/notifications/calendar.rs` | Month view beside the list |
+| `src/notifications/list.rs` | Notification list opened from the bell; popups of list and calendar |
+| `src/notifications/calendar.rs` | Month view opened from the clock |
 | `src/notifications/policy.rs` | Per-app notification settings, Do Not Disturb, sounds |
 | `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
 | `src/status.rs` | Panel network, volume and battery icons |

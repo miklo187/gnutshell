@@ -1,18 +1,21 @@
 //! The notification list: notifications whose banner went away without the
 //! user acting on it, kept so they can be read and copied later. A click on
-//! the panel clock opens it, with the calendar beside it; a dot next to the
-//! clock marks unread ones.
+//! the bell at the right of the panel opens it; the bell turns blue while
+//! there are unread ones. The two popups of this module share their overlay:
+//! the list under the bell, and the calendar (`calendar.rs`) under the clock.
 //!
 //! Listed notifications are already closed as far as the sending app knows,
 //! so they have no actions. The list lives in memory only.
 
 use super::calendar;
 use super::{
-    APP_FONT, CLOSE_SIZE, MAX_BODY_LINES, Notification, Notifications, PADDING, SPACING, SUMMARY_FONT, WIDTH, with,
+    APP_FONT, CLOSE_SIZE, MAX_BODY_LINES, Notification, Notifications, PADDING, RIGHT_MARGIN, SPACING, SUMMARY_FONT, WIDTH,
+    with,
 };
 use crate::ffi::{self, ClutterActor};
+use crate::icons;
 use crate::ui::{self, gobj};
-use glib::prelude::*;
+use gio::prelude::*;
 use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::rc::Rc;
@@ -24,10 +27,11 @@ const CLEAR_WIDTH: f32 = 90.0;
 /// The line under the entries that says how many more there are.
 const MORE_HEIGHT: f32 = 28.0;
 const CLOCK_PADDING: f32 = 14.0;
-const DOT_SIZE: f32 = 6.0;
+/// Width of the bell's button in the panel, and the size of its icon.
+const BELL_WIDTH: f32 = 32.0;
+const BELL_ICON_SIZE: f32 = 16.0;
 const HEADER_FONT: &CStr = c"Sans Bold 12";
 const HOVER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x20);
-const DIVIDER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x28);
 const CARD_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0x2a, 0x2a, 0x32, 0xff);
 
 /// Closed notifications, the one that arrived last first.
@@ -63,13 +67,15 @@ impl History {
     }
 }
 
-/// The list's actors and view state.
+/// The actors of the list and the calendar.
 pub struct ListView {
     /// Clickable area over the panel clock.
     clock_button: *mut ClutterActor,
     clock: *mut ClutterActor,
-    /// Unread marker, right of the clock.
-    dot: *mut ClutterActor,
+    bell_button: *mut ClutterActor,
+    bell_icon: *mut ClutterActor,
+    /// Where the bell is in the panel.
+    bell_x: std::cell::Cell<f32>,
     /// Full-monitor transparent actor that holds the grab.
     overlay: *mut ClutterActor,
     panel_box: *mut ClutterActor,
@@ -79,7 +85,10 @@ pub struct ListView {
 pub struct ListState {
     pub history: History,
     grab: Option<*mut ffi::ClutterGrab>,
+    /// Whether the list is open.
     pub open: bool,
+    /// Whether the calendar is open.
+    pub calendar: bool,
     unread: bool,
     /// Index of the first entry shown.
     offset: usize,
@@ -95,17 +104,24 @@ pub struct ListState {
 
 impl ListView {
     /// `clock` is the clock text inside `panel`.
-    pub fn new(stage: *mut ClutterActor, panel: *mut ClutterActor, clock: *mut ClutterActor) -> Self {
+    pub fn new(stage: *mut ClutterActor, panel: *mut ClutterActor, clock: *mut ClutterActor, height: f32) -> Self {
         unsafe {
             let clock_button = ffi::clutter_actor_new();
             ffi::clutter_actor_set_reactive(clock_button, 1);
             ffi::clutter_actor_add_child(panel, clock_button);
 
-            let dot = ffi::clutter_actor_new();
-            ffi::clutter_actor_set_size(dot, DOT_SIZE, DOT_SIZE);
-            ffi::clutter_actor_set_background_color(dot, &ui::SELECTED_COLOR);
-            ffi::clutter_actor_hide(dot);
-            ffi::clutter_actor_add_child(panel, dot);
+            let bell_button = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_reactive(bell_button, 1);
+            ffi::clutter_actor_set_size(bell_button, BELL_WIDTH, height);
+            let bell_icon = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_size(bell_icon, BELL_ICON_SIZE, BELL_ICON_SIZE);
+            ffi::clutter_actor_set_position(
+                bell_icon,
+                ((BELL_WIDTH - BELL_ICON_SIZE) / 2.0).floor(),
+                ((height - BELL_ICON_SIZE) / 2.0).floor(),
+            );
+            ffi::clutter_actor_add_child(bell_button, bell_icon);
+            ffi::clutter_actor_add_child(panel, bell_button);
 
             let overlay = ffi::clutter_actor_new();
             ffi::clutter_actor_set_reactive(overlay, 1);
@@ -116,7 +132,7 @@ impl ListView {
             ffi::clutter_actor_add_child(overlay, panel_box);
             ffi::clutter_actor_add_child(stage, overlay);
 
-            Self { clock_button, clock, dot, overlay, panel_box }
+            Self { clock_button, clock, bell_button, bell_icon, bell_x: Default::default(), overlay, panel_box }
         }
     }
 
@@ -124,43 +140,50 @@ impl ListView {
         unsafe {
             ffi::clutter_actor_destroy(self.overlay);
             ffi::clutter_actor_destroy(self.clock_button);
-            ffi::clutter_actor_destroy(self.dot);
+            ffi::clutter_actor_destroy(self.bell_button);
         }
     }
 }
 
 impl Notifications {
     pub(super) fn connect_list(self: &Rc<Self>) {
-        let button_ptr = self.view.clock_button;
-        let button = unsafe { gobj(button_ptr) };
-        let weak = Rc::downgrade(self);
-        button.connect_local("button-press-event", false, move |_| {
-            with(&weak, |n| n.open_list());
-            Some(true.to_value())
-        });
-        for (signal, color) in [("enter-event", HOVER_COLOR), ("leave-event", ui::TRANSPARENT)] {
-            button.connect_local(signal, false, move |_| {
-                unsafe { ffi::clutter_actor_set_background_color(button_ptr, &color) };
-                Some(false.to_value())
+        type Open = fn(&Rc<Notifications>);
+        let buttons: [(*mut ClutterActor, Open); 2] = [
+            (self.view.clock_button, Notifications::open_calendar),
+            (self.view.bell_button, Notifications::open_list),
+        ];
+        for (button, open) in buttons {
+            crate::windows::hover_highlight(button, ui::TRANSPARENT, HOVER_COLOR);
+            let weak = Rc::downgrade(self);
+            unsafe { gobj(button) }.connect_local("button-press-event", false, move |_| {
+                with(&weak, open);
+                Some(true.to_value())
             });
         }
+        // Do Not Disturb changes the bell.
+        if let Some(settings) = &self.settings {
+            let weak = Rc::downgrade(self);
+            settings.connect_changed(Some("show-banners"), move |_, _| with(&weak, |n| n.update_bell()));
+        }
+        self.update_bell();
 
         let overlay = unsafe { gobj(self.view.overlay) };
         let weak = Rc::downgrade(self);
         overlay.connect_local("key-press-event", false, move |args| {
             let key = ui::key_symbol(ui::event_arg(args));
-            let handled = matches!(
-                key,
-                ui::KEY_ESCAPE | ui::KEY_UP | ui::KEY_DOWN | ui::KEY_LEFT | ui::KEY_RIGHT | ui::KEY_HOME
-            );
-            with(&weak, |n| match key {
-                ui::KEY_ESCAPE => n.close_list(),
-                ui::KEY_UP => n.scroll_list(-1),
-                ui::KEY_DOWN => n.scroll_list(1),
-                ui::KEY_LEFT => n.turn_month(-1),
-                ui::KEY_RIGHT => n.turn_month(1),
-                ui::KEY_HOME => n.show_current_month(),
-                _ => {}
+            let mut handled = false;
+            with(&weak, |n| {
+                let calendar = n.state.borrow().list.calendar;
+                handled = true;
+                match key {
+                    ui::KEY_ESCAPE => n.close_list(),
+                    ui::KEY_UP if !calendar => n.scroll_list(-1),
+                    ui::KEY_DOWN if !calendar => n.scroll_list(1),
+                    ui::KEY_LEFT if calendar => n.turn_month(-1),
+                    ui::KEY_RIGHT if calendar => n.turn_month(1),
+                    ui::KEY_HOME if calendar => n.show_current_month(),
+                    _ => handled = false,
+                }
             });
             Some(handled.to_value())
         });
@@ -184,23 +207,30 @@ impl Notifications {
         });
     }
 
-    /// Fit the click area and unread dot to the clock; call after it moves.
+    /// Fit the click area to the clock; call after it moves.
     pub fn place_clock(&self) {
         unsafe {
             let x = ffi::clutter_actor_get_x(self.view.clock);
             let width = ffi::clutter_actor_get_width(self.view.clock);
             ffi::clutter_actor_set_position(self.view.clock_button, x - CLOCK_PADDING, 0.0);
             ffi::clutter_actor_set_size(self.view.clock_button, width + 2.0 * CLOCK_PADDING, self.panel_height);
-            ffi::clutter_actor_set_position(
-                self.view.dot,
-                x + width + 4.0,
-                ((self.panel_height - DOT_SIZE) / 2.0).floor(),
-            );
         }
     }
 
+    /// Put the bell so that it ends at `right_edge` in the panel.
+    pub fn place_bell(&self, right_edge: f32) {
+        let x = right_edge - BELL_WIDTH;
+        self.view.bell_x.set(x);
+        unsafe { ffi::clutter_actor_set_position(self.view.bell_button, x, 0.0) };
+    }
+
+    fn popup_open(&self) -> bool {
+        let state = self.state.borrow();
+        state.list.open || state.list.calendar
+    }
+
     pub fn open_list(self: &Rc<Self>) {
-        if self.state.borrow().list.open || self.state.borrow().locked {
+        if self.popup_open() || self.state.borrow().locked {
             return;
         }
         {
@@ -208,8 +238,6 @@ impl Notifications {
             state.list.open = true;
             state.list.offset = 0;
             state.list.scroll = 0.0;
-            state.list.month = 0;
-            state.list.month_scroll = 0.0;
         }
         // The banner and everything still waiting move into the list, oldest
         // first so that the newest ends up on top.
@@ -223,8 +251,27 @@ impl Notifications {
             self.retire(n);
         }
         self.state.borrow_mut().list.unread = false;
-        self.update_dot();
+        self.update_bell();
         self.build_list();
+        self.show_popup();
+    }
+
+    /// Banners wait while the calendar is open, and show after it.
+    pub fn open_calendar(self: &Rc<Self>) {
+        if self.popup_open() || self.state.borrow().locked {
+            return;
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            state.list.calendar = true;
+            state.list.month = 0;
+            state.list.month_scroll = 0.0;
+        }
+        self.build_calendar();
+        self.show_popup();
+    }
+
+    fn show_popup(&self) {
         unsafe {
             ffi::clutter_actor_show(self.view.overlay);
             ffi::clutter_actor_set_child_above_sibling(self.stage, self.view.overlay, std::ptr::null_mut());
@@ -234,13 +281,15 @@ impl Notifications {
         }
     }
 
+    /// Close the list or the calendar, whichever is open.
     pub fn close_list(self: &Rc<Self>) {
         let grab = {
             let mut state = self.state.borrow_mut();
-            if !state.list.open {
+            if !state.list.open && !state.list.calendar {
                 return;
             }
             state.list.open = false;
+            state.list.calendar = false;
             state.list.grab.take()
         };
         self.release_list(grab);
@@ -276,7 +325,7 @@ impl Notifications {
             }
             state.list.open
         };
-        self.update_dot();
+        self.update_bell();
         // While opening there is no grab yet, and the list is built after.
         if open && self.state.borrow().list.grab.is_some() {
             self.build_list();
@@ -294,7 +343,7 @@ impl Notifications {
             (removed, state.list.open)
         };
         if removed {
-            self.update_dot();
+            self.update_bell();
             if open {
                 self.build_list();
             }
@@ -319,18 +368,20 @@ impl Notifications {
         self.build_list();
     }
 
-    fn update_dot(&self) {
+    /// The bell is blue while there are unread notifications, and crossed
+    /// out with Do Not Disturb.
+    fn update_bell(&self) {
         let unread = self.state.borrow().list.unread;
-        unsafe {
-            if unread {
-                ffi::clutter_actor_show(self.view.dot);
-            } else {
-                ffi::clutter_actor_hide(self.view.dot);
-            }
-        }
+        let quiet = self.settings.as_ref().is_some_and(|s| !s.boolean("show-banners"));
+        let name = if quiet { "notifications-disabled-symbolic" } else { "preferences-system-notifications-symbolic" };
+        let color = if unread { &ui::SELECTED_COLOR } else { &ui::TEXT_COLOR };
+        let scale = ui::primary_monitor_scale(self.display);
+        let content = icons::symbolic(name, color, BELL_ICON_SIZE, scale, self.stage);
+        let content = content.as_ref().map_or(std::ptr::null_mut(), |c| c.as_ptr() as *mut ffi::ClutterContent);
+        unsafe { ffi::clutter_actor_set_content(self.view.bell_icon, content) };
     }
 
-    /// Lay the list out below the clock: as many entries from `offset` as fit
+    /// Lay the list out below the bell: as many entries from `offset` as fit
     /// on the primary monitor.
     pub(super) fn build_list(self: &Rc<Self>) {
         let Some(geo) = ui::primary_monitor_geometry(self.display) else { return };
@@ -342,9 +393,6 @@ impl Notifications {
             (list.history.entries.iter().cloned().collect::<Vec<_>>(), list.offset)
         };
         let width = WIDTH.min(geo.width as f32 - 32.0);
-        // Left out where there is no room beside the list.
-        let calendar_width = Some(calendar::width()).filter(|w| width + w <= geo.width as f32 - 32.0);
-        let box_width = width + calendar_width.map_or(0.0, |w| w + 1.0);
         // Down to the taskbar, at most.
         let max_height = geo.height as f32 - self.panel_height - crate::taskbar::HEIGHT as f32 - 2.0 * SPACING;
         let panel_box = self.view.panel_box;
@@ -399,24 +447,34 @@ impl Notifications {
 
             ffi::clutter_actor_set_position(self.view.overlay, geo.x as f32, geo.y as f32);
             ffi::clutter_actor_set_size(self.view.overlay, geo.width as f32, geo.height as f32);
-            if calendar_width.is_some() {
-                y = y.max(self.add_calendar(panel_box, width + 1.0));
-                let line = ffi::clutter_actor_new();
-                ffi::clutter_actor_set_background_color(line, &DIVIDER_COLOR);
-                ffi::clutter_actor_set_size(line, 1.0, y - 2.0 * SPACING);
-                ffi::clutter_actor_set_position(line, width, SPACING);
-                ffi::clutter_actor_add_child(panel_box, line);
-            }
-            ffi::clutter_actor_set_size(panel_box, box_width, y);
-            ffi::clutter_actor_set_position(
-                panel_box,
-                ((geo.width as f32 - box_width) / 2.0).floor(),
-                self.panel_height + SPACING,
-            );
+            ffi::clutter_actor_set_size(panel_box, width, y);
+            // Centered under the bell, as far as the monitor allows.
+            let centered = self.view.bell_x.get() + BELL_WIDTH / 2.0 - width / 2.0;
+            self.place_popup(geo, centered.min(geo.width as f32 - width - RIGHT_MARGIN).max(RIGHT_MARGIN));
         }
         let mut state = self.state.borrow_mut();
         state.list.at_end = at_end;
         state.list.shown = shown;
+    }
+
+    pub(super) fn build_calendar(self: &Rc<Self>) {
+        let Some(geo) = ui::primary_monitor_geometry(self.display) else { return };
+        let width = calendar::width();
+        let panel_box = self.view.panel_box;
+        unsafe { ffi::clutter_actor_destroy_all_children(panel_box) };
+        let height = self.add_calendar(panel_box);
+        unsafe { ffi::clutter_actor_set_size(panel_box, width, height) };
+        // Centered like the clock.
+        self.place_popup(geo, ((geo.width as f32 - width) / 2.0).max(0.0));
+    }
+
+    /// Cover the monitor with the overlay, and put the box `x` from its left.
+    fn place_popup(&self, geo: ffi::MtkRectangle, x: f32) {
+        unsafe {
+            ffi::clutter_actor_set_position(self.view.overlay, geo.x as f32, geo.y as f32);
+            ffi::clutter_actor_set_size(self.view.overlay, geo.width as f32, geo.height as f32);
+            ffi::clutter_actor_set_position(self.view.panel_box, x.floor(), self.panel_height + SPACING);
+        }
     }
 
     /// "▾ 5 more" at `y`; a click goes on to them. Returns its bottom.

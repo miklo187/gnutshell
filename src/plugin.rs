@@ -500,6 +500,15 @@ impl imp::GnutshellPlugin {
             *self.screenshots.borrow_mut() =
                 Some(crate::screenshot::Screenshots::new(display, stage, notifications.clone()));
             *self.notifications.borrow_mut() = Some(notifications);
+            if let Some(sources) = self.input_sources.borrow().as_ref() {
+                // The bell sits left of the layout indicator.
+                let weak = self.obj().downgrade();
+                sources.set_width_handler(move || {
+                    if let Some(plugin) = weak.upgrade() {
+                        plugin.imp().place_status();
+                    }
+                });
+            }
             let weak = self.obj().downgrade();
             let lock = crate::lockscreen::LockScreen::new(
                 display,
@@ -953,6 +962,11 @@ impl imp::GnutshellPlugin {
         }
         if let Some(sources) = self.input_sources.borrow().as_ref() {
             sources.place(right_edge);
+            right_edge -= sources.width();
+        }
+        let notifications = self.notifications.borrow().clone();
+        if let Some(notifications) = notifications {
+            notifications.place_bell(right_edge);
         }
     }
 

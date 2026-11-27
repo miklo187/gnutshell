@@ -1,5 +1,5 @@
 //! Desktop notifications: the `org.freedesktop.Notifications` service and the
-//! banner that shows them below the panel.
+//! banner that shows them below the right end of the panel.
 //!
 //! One banner shows at a time; the rest wait in a queue. A notification is
 //! closed when its banner goes away; if the user didn't act on it, it stays
@@ -90,6 +90,8 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long to wait again when the timeout hits while the pointer is over
 /// the banner.
 const HOVER_GRACE: Duration = Duration::from_secs(1);
+/// Between the banner or the list and the monitor's right edge.
+const RIGHT_MARGIN: f32 = 4.0;
 /// Cap on waiting notifications, so a chatty app can't grow memory.
 const MAX_QUEUE: usize = 20;
 /// Cap on text taken from a client.
@@ -251,7 +253,7 @@ impl Notifications {
         let settings = gio::SettingsSchemaSource::default()
             .and_then(|s| s.lookup("org.gnome.desktop.notifications", true))
             .map(|_| gio::Settings::new("org.gnome.desktop.notifications"));
-        let view = list::ListView::new(stage, panel, clock);
+        let view = list::ListView::new(stage, panel, clock, panel_height);
         let this = Rc::new(Self { display, stage, panel_height, root, view, settings, state: RefCell::default() });
         this.connect_banner();
         this.connect_list();
@@ -284,9 +286,15 @@ impl Notifications {
         } else if current.is_some() {
             self.place();
         }
-        // The monitor may have changed under an open list.
-        if self.state.borrow().list.open {
+        // The monitor may have changed under an open popup.
+        let (list, calendar) = {
+            let state = self.state.borrow();
+            (state.list.open, state.list.calendar)
+        };
+        if list {
             self.build_list();
+        } else if calendar {
+            self.build_calendar();
         }
         self.place_clock();
         self.show_next();
@@ -547,7 +555,7 @@ impl Notifications {
     fn show_next(self: &Rc<Self>) {
         {
             let state = self.state.borrow();
-            if state.locked || state.list.open || state.current.is_some() {
+            if state.locked || state.list.open || state.list.calendar || state.current.is_some() {
                 return;
             }
         }
@@ -753,14 +761,15 @@ impl Notifications {
         }
     }
 
-    /// Top center of the primary monitor, below the panel, above everything.
+    /// Top right of the primary monitor, below the panel, above everything.
     fn place(&self) {
         let Some(geo) = ui::primary_monitor_geometry(self.display) else { return };
         unsafe {
             let width = ffi::clutter_actor_get_width(self.root);
             ffi::clutter_actor_set_position(
                 self.root,
-                (geo.x as f32 + (geo.width as f32 - width) / 2.0).floor(),
+                // As far right as the notification list.
+                (geo.x as f32 + geo.width as f32 - width - RIGHT_MARGIN).max(geo.x as f32).floor(),
                 geo.y as f32 + self.panel_height + SPACING,
             );
             ffi::clutter_actor_set_child_above_sibling(self.stage, self.root, std::ptr::null_mut());

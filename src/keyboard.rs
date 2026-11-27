@@ -11,7 +11,7 @@
 use crate::ffi::{self, ClutterActor, MetaDisplay};
 use crate::ui::{self, gobj};
 use gio::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, CString, c_char};
 use std::rc::{Rc, Weak};
 
@@ -66,6 +66,8 @@ pub struct InputSources {
     label: *mut ClutterActor,
     panel_height: f32,
     state: RefCell<State>,
+    width: Cell<f32>,
+    width_handler: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 struct State {
@@ -107,6 +109,8 @@ impl InputSources {
                     desc: std::ptr::null_mut(),
                     right_edge: 0.0,
                 }),
+                width: Cell::default(),
+                width_handler: RefCell::default(),
             })
         };
         this.connect_signals();
@@ -182,6 +186,16 @@ impl InputSources {
         if let Err(e) = self.settings.set_value("mru-sources", &mru.to_variant()) {
             glib::g_warning!("gnutshell", "could not store mru-sources: {e}");
         }
+    }
+
+    /// `handler` runs when the indicator's width changes.
+    pub fn set_width_handler(&self, handler: impl Fn() + 'static) {
+        *self.width_handler.borrow_mut() = Some(Rc::new(handler));
+    }
+
+    /// How much of the panel the indicator takes.
+    pub fn width(&self) -> f32 {
+        self.width.get()
     }
 
     /// Place the indicator so its right edge is `right_edge` px from the
@@ -284,11 +298,22 @@ impl InputSources {
     }
 
     fn update_indicator(&self) {
+        let width = self.draw_indicator();
+        if self.width.replace(width) != width {
+            let handler = self.width_handler.borrow().clone();
+            if let Some(handler) = handler {
+                handler();
+            }
+        }
+    }
+
+    /// Returns the width taken.
+    fn draw_indicator(&self) -> f32 {
         let state = self.state.borrow();
         unsafe {
             if state.sources.len() < 2 {
                 ffi::clutter_actor_hide(self.indicator);
-                return;
+                return 0.0;
             }
             let text = state.sources.get(state.current).map_or("", |s| s.layout.as_str());
             ui::set_text(self.label, text);
@@ -303,6 +328,7 @@ impl InputSources {
                 ((self.panel_height - label_h) / 2.0).floor(),
             );
             ffi::clutter_actor_show(self.indicator);
+            width
         }
     }
 }

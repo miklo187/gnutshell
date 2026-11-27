@@ -1,4 +1,4 @@
-//! The month view beside the notification list. Month and day names and the
+//! The month view that a click on the panel clock opens. Month and day names and the
 //! first day of the week follow the locale. It shows dates only, no events.
 //!
 //! Weekdays are numbered from 0 for Monday to 6 for Sunday.
@@ -154,16 +154,16 @@ impl Notifications {
             // A century either way is plenty, and keeps the dates valid.
             state.list.month = state.list.month.saturating_add(delta).clamp(-1200, 1200);
         }
-        self.build_list();
+        self.build_calendar();
     }
 
     pub(super) fn show_current_month(self: &Rc<Self>) {
         self.state.borrow_mut().list.month = 0;
-        self.build_list();
+        self.build_calendar();
     }
 
     /// The calendar for the month in view, and its height. Add it to `parent`.
-    pub(super) fn add_calendar(self: &Rc<Self>, parent: *mut ClutterActor, x: f32) -> f32 {
+    pub(super) fn add_calendar(self: &Rc<Self>, parent: *mut ClutterActor) -> f32 {
         let Some(today) = today() else { return 0.0 };
         let (offset, width) = (self.state.borrow().list.month, width());
         let (year, month) = add_months(today.year, today.month, offset);
@@ -175,7 +175,6 @@ impl Notifications {
             let calendar = ffi::clutter_actor_new();
             ffi::clutter_actor_set_reactive(calendar, 1);
             ffi::clutter_actor_add_child(parent, calendar);
-            ffi::clutter_actor_set_position(calendar, x, 0.0);
             let weak = Rc::downgrade(self);
             gobj(calendar).connect_local("scroll-event", false, move |args| {
                 with(&weak, |n| {
@@ -184,7 +183,6 @@ impl Notifications {
                         n.turn_month(rows.signum());
                     }
                 });
-                // Not on to the list, which scrolls on the same event.
                 Some(true.to_value())
             });
 
