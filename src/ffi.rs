@@ -491,6 +491,12 @@ unsafe extern "C" {
         x: c_double,
         y: c_double,
     );
+    pub fn clutter_virtual_input_device_notify_button(
+        dev: *mut ClutterVirtualInputDevice,
+        time_us: u64,
+        button: u32,
+        button_state: c_int, // ClutterButtonState
+    );
     pub fn clutter_virtual_input_device_notify_discrete_scroll(
         dev: *mut ClutterVirtualInputDevice,
         time_us: u64,

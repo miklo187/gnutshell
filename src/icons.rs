@@ -250,6 +250,14 @@ fn render_png(path: &Path, px: i32) -> Option<Surface> {
     }
 }
 
+/// Content from tightly packed premultiplied BGRA pixels (uncached).
+pub fn from_pixels(bgra: &[u8], width: i32, height: i32, stage: *mut ClutterActor) -> Option<glib::Object> {
+    if width <= 0 || height <= 0 || bgra.len() < width as usize * height as usize * 4 {
+        return None;
+    }
+    unsafe { upload_pixels(bgra.as_ptr(), width, height, width * 4, stage) }
+}
+
 /// Upload a cairo ARGB32 surface as a `ClutterTextureContent`.
 unsafe fn upload(surface: *mut ffi::cairo_surface_t, stage: *mut ClutterActor) -> Option<glib::Object> {
     // Cairo ARGB32 is a native-endian premultiplied u32: B,G,R,A bytes on
@@ -258,16 +266,35 @@ unsafe fn upload(surface: *mut ffi::cairo_surface_t, stage: *mut ClutterActor) -
     compile_error!("icon upload assumes a little-endian pixel layout");
     unsafe {
         ffi::cairo_surface_flush(surface);
+        upload_pixels(
+            ffi::cairo_image_surface_get_data(surface),
+            ffi::cairo_image_surface_get_width(surface),
+            ffi::cairo_image_surface_get_height(surface),
+            ffi::cairo_image_surface_get_stride(surface),
+            stage,
+        )
+    }
+}
+
+/// `data` must hold `height` rows of `stride` bytes of premultiplied BGRA.
+unsafe fn upload_pixels(
+    data: *const u8,
+    width: i32,
+    height: i32,
+    stride: i32,
+    stage: *mut ClutterActor,
+) -> Option<glib::Object> {
+    unsafe {
         let backend = ffi::clutter_context_get_backend(ffi::clutter_actor_get_context(stage));
         let ctx = ffi::clutter_backend_get_cogl_context(backend);
         let mut err = std::ptr::null_mut();
         let texture = ffi::cogl_texture_2d_new_from_data(
             ctx,
-            ffi::cairo_image_surface_get_width(surface),
-            ffi::cairo_image_surface_get_height(surface),
+            width,
+            height,
             ffi::COGL_PIXEL_FORMAT_BGRA_8888_PRE,
-            ffi::cairo_image_surface_get_stride(surface),
-            ffi::cairo_image_surface_get_data(surface),
+            stride,
+            data,
             &mut err,
         );
         if texture.is_null() {

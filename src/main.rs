@@ -9,6 +9,7 @@ mod icons;
 mod keyboard;
 mod launcher;
 mod lockscreen;
+mod notifications;
 mod osd;
 mod pam;
 mod plugin;

@@ -174,6 +174,7 @@ mod imp {
         pub(super) polkit_agent: RefCell<Option<crate::polkit::Agent>>,
         pub(super) session_menu: RefCell<Option<std::rc::Rc<SessionMenu>>>,
         pub(super) input_sources: RefCell<Option<std::rc::Rc<crate::keyboard::InputSources>>>,
+        pub(super) notifications: RefCell<Option<std::rc::Rc<crate::notifications::Notifications>>>,
         pub(super) osd: RefCell<Option<std::rc::Rc<crate::osd::Osd>>>,
         pub(super) shell_dbus: RefCell<Option<crate::shell_dbus::ShellService>>,
         pub(super) lock_screen: RefCell<Option<std::rc::Rc<crate::lockscreen::LockScreen>>>,
@@ -281,6 +282,10 @@ impl imp::GnativePlugin {
         if let Some(agent) = self.polkit_agent.borrow().as_ref() {
             agent.set_locked(locked);
         }
+        let notifications = self.notifications.borrow().clone();
+        if let Some(n) = notifications {
+            n.set_locked(locked);
+        }
     }
 
     fn build_shell(&self) {
@@ -319,6 +324,8 @@ impl imp::GnativePlugin {
             let osd = crate::osd::Osd::new(display, stage);
             *self.shell_dbus.borrow_mut() = Some(crate::shell_dbus::ShellService::new(display, osd.clone()));
             *self.osd.borrow_mut() = Some(osd);
+            *self.notifications.borrow_mut() =
+                Some(crate::notifications::Notifications::new(display, stage, PANEL_HEIGHT as f32));
             let weak = self.obj().downgrade();
             let lock = crate::lockscreen::LockScreen::new(
                 display,
@@ -436,7 +443,7 @@ impl imp::GnativePlugin {
     /// separated by spaces: characters to type, one of `Super`, `Return`,
     /// `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
     /// a raw keysym `0x…` (tap), `down:0x…` / `up:0x…` (hold / release),
-    /// `move:X,Y` (pointer), `wheel-up` / `wheel-down`,
+    /// `move:X,Y` (pointer), `click` (primary button), `wheel-up` / `wheel-down`,
     /// or `_` to pause one step. Drives the real
     /// input path headless.
     #[cfg(debug_assertions)]
@@ -449,6 +456,7 @@ impl imp::GnativePlugin {
             Key(u32, bool),
             Move(f64, f64),
             Wheel(i32), // ClutterScrollDirection
+            Click,
         }
         use Input::*;
         let hex = |t: &str| u32::from_str_radix(t, 16).ok();
@@ -465,6 +473,7 @@ impl imp::GnativePlugin {
                 "Down" => tap(crate::ui::KEY_DOWN),
                 "Alt-down" => vec![Key(0xffe9, true)],
                 "Alt-up" => vec![Key(0xffe9, false)],
+                "click" => vec![Click],
                 "wheel-up" => vec![Wheel(ffi::CLUTTER_SCROLL_UP)],
                 "wheel-down" => vec![Wheel(ffi::CLUTTER_SCROLL_DOWN)],
                 "_" => vec![], // pause one step
@@ -509,6 +518,12 @@ impl imp::GnativePlugin {
                                 ffi::clutter_virtual_input_device_notify_keyval(kbd, now, keyval, state);
                             }
                             Move(x, y) => ffi::clutter_virtual_input_device_notify_absolute_motion(ptr, now, x, y),
+                            Click => {
+                                const PRIMARY: u32 = 1; // CLUTTER_BUTTON_PRIMARY
+                                for state in [1, 0] { // pressed, released
+                                    ffi::clutter_virtual_input_device_notify_button(ptr, now, PRIMARY, state);
+                                }
+                            }
                             Wheel(direction) => ffi::clutter_virtual_input_device_notify_discrete_scroll(
                                 ptr,
                                 now,
@@ -678,6 +693,10 @@ impl imp::GnativePlugin {
             if let Some(ws) = self.workspaces.borrow().as_ref() {
                 ws.relayout();
             }
+            let notifications = self.notifications.borrow().clone();
+            if let Some(n) = notifications {
+                n.sync();
+            }
 
             if ffi::meta_display_get_monitor_in_fullscreen(display, primary) != 0 {
                 ffi::clutter_actor_hide(shell.panel);
@@ -724,6 +743,9 @@ impl imp::GnativePlugin {
             lock.destroy();
         }
         drop(self.shell_dbus.borrow_mut().take()); // releases the bus name and grabs
+        if let Some(notifications) = self.notifications.borrow_mut().take() {
+            notifications.destroy();
+        }
         if let Some(osd) = self.osd.borrow_mut().take() {
             osd.destroy();
         }

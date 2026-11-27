@@ -20,6 +20,16 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   ask for a password through gnative's agent (for example when other users
   are logged in). Log Out ends gnative and with it the session. Actions that
   logind reports as unavailable are hidden.
+- Notifications: gnative is the `org.freedesktop.Notifications` service. A
+  banner below the panel shows the icon or image, app name, title, up to three
+  lines of text and up to three action buttons. Click the banner for the default
+  action, or ✕ to dismiss it. One banner shows at a time and the rest queue.
+  Banners hide after 5 s (or the app's timeout, at most 30 s), and stay while
+  the pointer is over them; critical ones stay until dismissed. Nothing shows
+  on the lock screen; waiting notifications show after unlock. Over a
+  fullscreen window only critical ones show. With Do Not Disturb
+  (`org.gnome.desktop.notifications show-banners` off), other notifications are
+  discarded.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super to open a search field over a dimmed screen. Type to
   filter installed apps. Scroll with the mouse wheel or touchpad; use Up/Down or Tab to select, and Enter or a click to
@@ -140,13 +150,18 @@ Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 **Keyboard-driven test** (debug builds only): `GNATIVE_DEBUG_KEYS="<ms>:<tokens>"`
 types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
 characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` /
-`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `wheel-up` / `wheel-down`, and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
+`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `click`, `wheel-up` / `wheel-down`, and `_` (pause). `GNATIVE_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
 
 `GNATIVE_DEBUG_PAM_USER=<user>` checks lock screen passwords against another
 (e.g. nonexistent) user, so test attempts never count against your account.
 `GNATIVE_DEBUG_SESSION_MENU=<ms>` opens the session menu. Only drive it toward
 Log Out in tests: the other entries really suspend, restart or power off.
+
+**Isolated settings in tests:** set `XDG_CONFIG_HOME` to a temporary directory
+*before* `dbus-run-session`, not inside it. Otherwise the private bus starts
+`dconf-service` with your real config, and `gsettings set` changes your own
+settings.
 
 **Switcher test** (debug builds only): `GNATIVE_DEBUG_SWITCH=<ms>` runs Alt+Tab on
 its own after the given number of milliseconds and logs the focused window before and
@@ -194,6 +209,7 @@ All mutter options work (`--help`).
 | `src/switcher.rs` | Alt+Tab window switcher |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
+| `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
 | `src/osd.rs` | Volume/brightness popup |
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
 | `src/lockscreen.rs` | Lock screen, `org.gnome.ScreenSaver`, logind lock/sleep, idle |
@@ -218,8 +234,11 @@ All mutter options work (`--help`).
   `GNATIVE_FULL_TEARDOWN=1` to run it anyway, for debugging.
 - **Only part of `org.gnome.Shell` is implemented**: accelerators, `ShowOSD`
   and the `Mode`/`OverviewActive` properties. Screenshots, screencasts, `Eval`
-  and the extensions API are missing, as is a notification server
-  (`org.freedesktop.Notifications`), so desktop notifications aren't shown.
+  and the extensions API are missing.
+- **No notification list yet.** A notification is gone once its banner closes,
+  including ones discarded by Do Not Disturb. Per-app notification settings,
+  sounds and `org.gtk.Notifications` are not supported (GTK apps fall back to
+  `org.freedesktop.Notifications`).
 - **Log Out doesn't ask apps to save first.** Under gnome-session it requests
   a forced logout (gnative has no end-session dialog for inhibitors yet);
   without gnome-session it just ends gnative.

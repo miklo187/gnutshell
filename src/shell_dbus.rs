@@ -371,7 +371,7 @@ impl Inner {
         params.insert("timestamp", timestamp);
         let mode = if crate::lockscreen::is_locked() { ACTION_MODE_LOCK_SCREEN } else { ACTION_MODE_NORMAL };
         params.insert("action-mode", mode);
-        if let Some(token) = self.activation_token(timestamp) {
+        if let Some(token) = crate::ui::activation_token(self.display, timestamp) {
             params.insert("activation-token", token);
         }
         if let Some(device) = device {
@@ -386,20 +386,6 @@ impl Inner {
         let body = glib::Variant::tuple_from_iter([action.to_variant(), params.end()]);
         if let Err(e) = connection.emit_signal(Some(&destination), OBJECT_PATH, INTERFACE, signal, Some(&body)) {
             glib::g_warning!("gnative", "could not emit {signal}: {e}");
-        }
-    }
-
-    /// An XDG activation token, so an app the shortcut launches may take focus.
-    fn activation_token(&self, timestamp: u32) -> Option<String> {
-        unsafe {
-            let sn = ffi::meta_display_get_startup_notification(self.display);
-            let ctx = ffi::meta_startup_notification_create_launcher(sn);
-            if ctx.is_null() {
-                return None;
-            }
-            ffi::meta_launch_context_set_timestamp(ctx, timestamp);
-            let ctx: gio::AppLaunchContext = from_glib_full(ctx as *mut gio::ffi::GAppLaunchContext);
-            ctx.startup_notify_id(None::<&gio::AppInfo>, &[]).map(|s| s.to_string())
         }
     }
 

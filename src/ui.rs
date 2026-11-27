@@ -1,6 +1,7 @@
 //! Shared look and small Clutter helpers for shell UI.
 
 use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
+use gio::prelude::AppLaunchContextExt;
 use glib::prelude::*;
 use glib::translate::*;
 use std::ffi::{CStr, CString};
@@ -66,6 +67,21 @@ pub fn primary_monitor_scale(display: *mut MetaDisplay) -> f32 {
             return 1.0;
         }
         ffi::meta_display_get_monitor_scale(display, primary)
+    }
+}
+
+/// An XDG activation token, so an app launched or signalled by the shell may
+/// take focus.
+pub fn activation_token(display: *mut MetaDisplay, timestamp: u32) -> Option<String> {
+    unsafe {
+        let sn = ffi::meta_display_get_startup_notification(display);
+        let ctx = ffi::meta_startup_notification_create_launcher(sn);
+        if ctx.is_null() {
+            return None;
+        }
+        ffi::meta_launch_context_set_timestamp(ctx, timestamp);
+        let ctx: gio::AppLaunchContext = from_glib_full(ctx as *mut gio::ffi::GAppLaunchContext);
+        ctx.startup_notify_id(None::<&gio::AppInfo>, &[]).map(|s| s.to_string())
     }
 }
 
