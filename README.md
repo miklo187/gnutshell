@@ -7,6 +7,69 @@ Rust GObject subclass of `MetaPlugin` as the compositor plugin. Then it runs mut
 main loop. Mutter handles compositing, Wayland, KMS, input and window management. gnutshell
 supplies the shell: the UI drawn with Clutter, plus window effects.
 
+![Windows with the panel on top, the taskbar below and a window preview](docs/screenshots/desktop.png)
+
+| Window overview | Calendar | Quick settings |
+|---|---|---|
+| ![All windows as tiles](docs/screenshots/overview.png) | ![Calendar under the clock](docs/screenshots/calendar.png) | ![Quick settings menu](docs/screenshots/quick-settings.png) |
+
+(Taken in a headless test session; the Bluetooth devices are made up.)
+
+## Status
+
+Early software (0.1.0). It has been used on a single PC: CachyOS (based on Arch
+Linux) with mutter 51.1 and one monitor at 150 % scale; connecting and
+disconnecting a real Bluetooth device works there. Several monitors and suspend
+and resume are untested, and so are other distributions. It runs only with
+**mutter 51**. Keep GNOME installed: if gnutshell fails, pick GNOME on the
+login screen.
+
+## Install
+
+On Arch Linux and distributions based on it. First what building needs:
+
+```sh
+sudo pacman -S --needed base-devel git rust mutter polkit cairo librsvg glycin systemd-libs libpulse
+```
+
+Then what a session needs:
+
+```sh
+sudo pacman -S --needed gnome-session gnome-settings-daemon gsettings-desktop-schemas adwaita-icon-theme pipewire-pulse
+```
+
+Pacman installs some further parts by itself, among them Xwayland for X11 apps
+such as Steam, GNOME Settings, and UPower for the battery icon.
+
+Optional packages. Each one adds what the second column names. gnutshell runs
+without it; only that feature is then missing.
+
+| Package | Adds |
+|---|---|
+| `gnome-backgrounds` | GNOME's default wallpapers |
+| `gcr` | keyring password prompts |
+| `gnome-shell` | the screenshot keys (only its settings schema is used) |
+| `xdg-desktop-portal-gnome` | screenshots and color picking for apps, through the portal |
+| `bluez` | Bluetooth in quick settings |
+| `networkmanager` | the network icon |
+
+Build and install, as your normal user (the script asks for `sudo` itself; it
+needs Rust 1.92 or newer):
+
+```sh
+git clone https://github.com/miklo187/gnutshell.git
+cd gnutshell
+dist/install.sh
+```
+
+Log out and pick **gnutshell** on the GDM login screen. To remove it again, run
+`dist/install.sh uninstall`. What the script installs is listed under
+[Run](#run).
+
+First steps: press Super or click ☰ for apps. Right-click a window title or a
+taskbar entry to pin its app. Right-click empty taskbar space to group windows.
+Logs: `journalctl --user -u gnutshell.service -b`.
+
 ## Current features
 
 - Desktop background from `org.gnome.desktop.background`: the picture on every
@@ -237,8 +300,9 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 
 Requires mutter 51 development files (`libmutter-51.pc`), polkit
 (`polkit-agent-1.pc`), cairo, librsvg, glycin (`glycin-2.pc`), libsystemd, libpulse with its GLib
-main loop (`libpulse-mainloop-glib.pc`) and Rust. Running it as a
-session needs gnome-session and gnome-settings-daemon.
+main loop (`libpulse-mainloop-glib.pc`) and Rust 1.92 or newer; see
+[Install](#install) for package names. Running it as a session needs
+gnome-session and gnome-settings-daemon.
 
 ```sh
 cargo build --release

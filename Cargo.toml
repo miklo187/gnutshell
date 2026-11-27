@@ -3,6 +3,9 @@ name = "gnutshell"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-2.0-or-later"
+rust-version = "1.92"
+description = "A GNOME-style shell written in Rust, running on libmutter"
+repository = "https://github.com/miklo187/gnutshell"
 
 [dependencies]
 gio = "0.22"
