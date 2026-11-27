@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.1 (not yet released)
+
+### Security
+
+Update from 0.1.0. In 0.1.0, any program running in your session without a
+sandbox could use gnutshell to capture the screen, and to overwrite your files
+with that picture: it only had to take the unused bus name
+`org.gnome.Screenshot`, which gnutshell trusted. gnome-shell 51 does not trust
+that name.
+
+- `org.gnome.Screenshot` may no longer call the screenshot API. As a result the
+  API also refuses the `gnome-screenshot` tool.
+- A file name given to the API that is not an absolute path must be a plain
+  name, and never overwrites an existing file.
+- `org.gnome.desktop.lockdown disable-save-to-disk` is now obeyed.
+
+`xdg-desktop-portal-gnome` is now listed as required.
+
 ## 0.1.0 (2026-11-28)
 
 First version. A GNOME-style shell on mutter 51, run by gnome-session.

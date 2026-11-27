@@ -1,6 +1,7 @@
 //! Screenshots: gnome-shell's screenshot keybindings and its
 //! `org.gnome.Shell.Screenshot` D-Bus API (used by the GNOME portal and
-//! gnome-screenshot).
+//! gsd-media-keys). With `org.gnome.desktop.lockdown disable-save-to-disk` no
+//! files are written: the keys only copy, and the methods that save refuse.
 //!
 //! `Print` selects an area (Enter takes the whole screen), `Shift+Print`
 //! takes the whole screen and `Alt+Print` the focused window. Those save a PNG
@@ -30,11 +31,13 @@ const BUS_NAME: &str = "org.gnome.Shell.Screenshot";
 const OBJECT_PATH: &str = "/org/gnome/Shell/Screenshot";
 const INTERFACE: &str = "org.gnome.Shell.Screenshot";
 
-const ALLOWED_CALLERS: [&str; 3] = [
-    "org.freedesktop.impl.portal.desktop.gnome",
-    "org.gnome.SettingsDaemon.MediaKeys",
-    "org.gnome.Screenshot",
-];
+/// Who may call the D-Bus methods, as in gnome-shell. Only names that a
+/// running session service holds belong here: owning a name proves nothing by
+/// itself, and any program in the session can take one that is free. So
+/// `org.gnome.Screenshot` is not listed.
+const ALLOWED_CALLERS: [&str; 2] =
+    ["org.freedesktop.impl.portal.desktop.gnome", "org.gnome.SettingsDaemon.MediaKeys"];
+const LOCKDOWN_SCHEMA: &str = "org.gnome.desktop.lockdown";
 
 const INTERFACE_XML: &str = r#"
 <node>
@@ -691,11 +694,27 @@ impl Screenshots {
     }
 
     /// A screenshot the user asked for with a key.
+    /// For the screenshot keys while saving to disk is disabled.
+    fn copy_without_saving(&self, picture: Result<Picture, String>) {
+        let copied = picture
+            .and_then(encode_png)
+            .map(|png| ui::set_clipboard_data(self.display, c"image/png", &png));
+        let (title, text) = match copied {
+            Ok(true) => ("Screenshot copied", "Saving to disk is disabled"),
+            _ => ("Screenshot failed", "Saving to disk is disabled, and it could not be copied"),
+        };
+        self.notifications.notify_shell(title, text, "camera-photo-symbolic");
+    }
+
     fn take_for_user(self: &Rc<Self>, rect: MtkRectangle, cursor: Option<&Cursor>) {
         self.end_flash();
         let picture = self.capture(rect, cursor);
         if picture.is_ok() {
             self.flash(rect);
+        }
+        if saving_disabled() {
+            self.copy_without_saving(picture);
+            return;
         }
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
@@ -773,6 +792,12 @@ impl Screenshots {
         }
         if crate::lockscreen::is_locked() {
             invocation.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied", "The screen is locked");
+            return;
+        }
+        let writes_a_file =
+            matches!(method, "Screenshot" | "ScreenshotWindow" | "ScreenshotArea" | "InteractiveScreenshot");
+        if writes_a_file && saving_disabled() {
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied", "Saving to disk is disabled");
             return;
         }
         match method {
@@ -867,6 +892,13 @@ fn is_allowed(connection: &gio::DBusConnection, sender: &str) -> bool {
     })
 }
 
+/// Whether the administrator or the user forbids saving files.
+fn saving_disabled() -> bool {
+    gio::SettingsSchemaSource::default()
+        .and_then(|s| s.lookup(LOCKDOWN_SCHEMA, true))
+        .is_some_and(|_| gio::Settings::new(LOCKDOWN_SCHEMA).boolean("disable-save-to-disk"))
+}
+
 /// Encode `picture` and write it on a worker thread, so the compositor
 /// doesn't stall. `name` is the D-Bus `filename` argument; `None` or empty
 /// means a new file in the screenshot folder. Returns the path and the PNG.
@@ -880,60 +912,73 @@ async fn save(picture: Picture, name: Option<String>) -> Result<(PathBuf, Vec<u8
         .unwrap_or_default();
     gio::spawn_blocking(move || {
         let png = encode_png(picture)?;
-        let path = match name.filter(|n| !n.is_empty()) {
-            Some(name) => {
-                let path = named_path(&folder, &name);
-                write(&path, &png, false)?;
-                path
-            }
-            None => write_new(&folder, &format!("Screenshot From {stamp}"), &png)?,
-        };
+        let path = store(&folder, &format!("Screenshot From {stamp}"), name.as_deref(), &png)?;
         Ok((path, png))
     })
     .await
     .map_err(|_| "The PNG writer crashed".to_owned())?
 }
 
-/// Where the D-Bus `filename` argument points, as in gnome-shell: an absolute
-/// path as it is; a bare name in the screenshot folder, as a `.png`.
-fn named_path(folder: &Path, name: &str) -> PathBuf {
-    if Path::new(name).is_absolute() {
-        return PathBuf::from(name);
-    }
-    let name = if name.ends_with(".png") { name.to_owned() } else { format!("{name}.png") };
-    folder.join(name)
+/// Where a picture goes, from the D-Bus `filename` argument.
+#[derive(Debug, PartialEq, Eq)]
+enum Destination<'a> {
+    /// A path the caller chose; as in gnome-shell, a file there is replaced.
+    Path(&'a Path),
+    /// A new file in the screenshot folder, named after this.
+    New(&'a str),
 }
 
-fn write(path: &Path, png: &[u8], must_be_new: bool) -> Result<(), String> {
+/// An absolute path is taken as it is. Anything else must be a plain file
+/// name, so that it cannot lead out of the screenshot folder.
+fn destination<'a>(default_stem: &'a str, name: Option<&'a str>) -> Result<Destination<'a>, String> {
+    let Some(name) = name.filter(|n| !n.is_empty()) else {
+        return Ok(Destination::New(default_stem));
+    };
+    if Path::new(name).is_absolute() {
+        return Ok(Destination::Path(Path::new(name)));
+    }
+    let stem = name.strip_suffix(".png").unwrap_or(name);
+    if matches!(stem, "" | "." | "..") || stem.contains(['/', '\0']) {
+        return Err("The file name must be a plain name or an absolute path".to_owned());
+    }
+    Ok(Destination::New(stem))
+}
+
+/// Write `png` and return where it went.
+fn store(folder: &Path, default_stem: &str, name: Option<&str>, png: &[u8]) -> Result<PathBuf, String> {
+    match destination(default_stem, name)? {
+        Destination::Path(path) => {
+            // Written beside the target and renamed over it.
+            gio::File::for_path(path)
+                .replace_contents(png, None, false, gio::FileCreateFlags::NONE, gio::Cancellable::NONE)
+                .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+            Ok(path.to_owned())
+        }
+        Destination::New(stem) => write_new(folder, stem, png),
+    }
+}
+
+/// Create the file at `path`; fails if something is there, a link included.
+fn create(path: &Path, png: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let fail = |e: std::io::Error| format!("Could not write {}: {e}", path.display());
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(fail)?;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true);
-    if must_be_new {
-        options.create_new(true);
-    } else {
-        options.create(true).truncate(true);
-    }
-    options.open(path).and_then(|mut f| f.write_all(png)).map_err(fail)
+    std::fs::OpenOptions::new().write(true).create_new(true).open(path)?.write_all(png)
 }
 
 /// Write `<stem>.png` in `folder`, or `<stem> (2).png` and so on: never over
 /// an existing file.
 fn write_new(folder: &Path, stem: &str, png: &[u8]) -> Result<PathBuf, String> {
-    let mut error = String::new();
+    let fail = |path: &Path, e: std::io::Error| format!("Could not write {}: {e}", path.display());
+    std::fs::create_dir_all(folder).map_err(|e| fail(folder, e))?;
     for n in 1..100 {
         let name = if n == 1 { format!("{stem}.png") } else { format!("{stem} ({n}).png") };
         let path = folder.join(name);
-        match write(&path, png, true) {
+        match create(&path, png) {
             Ok(()) => return Ok(path),
-            Err(e) if path.exists() => error = e,
-            Err(e) => return Err(e),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(fail(&path, e)),
         }
     }
-    Err(error)
+    Err(format!("Too many pictures named {stem} in {}", folder.display()))
 }
 
 fn encode_png(mut picture: Picture) -> Result<Vec<u8>, String> {
@@ -1095,11 +1140,48 @@ mod tests {
     }
 
     #[test]
+    fn only_names_of_session_services_may_call() {
+        // A name nobody holds could be taken by any program.
+        assert!(!ALLOWED_CALLERS.contains(&"org.gnome.Screenshot"));
+        assert_eq!(ALLOWED_CALLERS.len(), 2);
+    }
+
+    #[test]
     fn dbus_file_names() {
-        let folder = Path::new("/pictures/Screenshots");
-        assert_eq!(named_path(folder, "/tmp/a"), Path::new("/tmp/a"));
-        assert_eq!(named_path(folder, "shot"), folder.join("shot.png"));
-        assert_eq!(named_path(folder, "shot.png"), folder.join("shot.png"));
+        let to = |name| destination("default", name);
+        assert_eq!(to(None), Ok(Destination::New("default")));
+        assert_eq!(to(Some("")), Ok(Destination::New("default")));
+        assert_eq!(to(Some("/tmp/a")), Ok(Destination::Path(Path::new("/tmp/a"))));
+        assert_eq!(to(Some("shot")), Ok(Destination::New("shot")));
+        assert_eq!(to(Some("shot.png")), Ok(Destination::New("shot")));
+        assert_eq!(to(Some("..hidden")), Ok(Destination::New("..hidden")));
+        for escape in ["..", ".", ".png", "..png", "../x", "a/b", "a/../../b", "x/", "a\0b"] {
+            assert!(to(Some(escape)).is_err(), "{escape:?}");
+        }
+    }
+
+    #[test]
+    fn names_never_overwrite_but_paths_replace() {
+        let root = std::env::temp_dir().join(format!("gnutshell-store-{}", std::process::id()));
+        let folder = root.join("Screenshots");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("keep.png"), "old").unwrap();
+        // A link in the way is not followed.
+        std::fs::write(root.join("victim"), "old").unwrap();
+        std::os::unix::fs::symlink(root.join("victim"), folder.join("link.png")).unwrap();
+
+        assert_eq!(store(&folder, "d", Some("keep"), b"new"), Ok(folder.join("keep (2).png")));
+        assert_eq!(std::fs::read(folder.join("keep.png")).unwrap(), b"old");
+        assert_eq!(store(&folder, "d", Some("link"), b"new"), Ok(folder.join("link (2).png")));
+        assert_eq!(std::fs::read(root.join("victim")).unwrap(), b"old");
+        assert!(store(&folder, "d", Some("../escaped"), b"new").is_err());
+        assert!(!root.join("escaped.png").exists());
+
+        let chosen = root.join("chosen.png");
+        std::fs::write(&chosen, "old").unwrap();
+        assert_eq!(store(&folder, "d", chosen.to_str(), b"new"), Ok(chosen.clone()));
+        assert_eq!(std::fs::read(&chosen).unwrap(), b"new");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

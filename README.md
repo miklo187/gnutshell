@@ -35,7 +35,7 @@ sudo pacman -S --needed base-devel git rust mutter polkit cairo librsvg glycin s
 Then what a session needs:
 
 ```sh
-sudo pacman -S --needed gnome-session gnome-settings-daemon gsettings-desktop-schemas adwaita-icon-theme pipewire-pulse
+sudo pacman -S --needed gnome-session gnome-settings-daemon gsettings-desktop-schemas adwaita-icon-theme pipewire-pulse xdg-desktop-portal-gnome
 ```
 
 Pacman installs some further parts by itself, among them Xwayland for X11 apps
@@ -49,7 +49,6 @@ without it; only that feature is then missing.
 | `gnome-backgrounds` | GNOME's default wallpapers |
 | `gcr` | keyring password prompts |
 | `gnome-shell` | the screenshot keys (only its settings schema is used) |
-| `xdg-desktop-portal-gnome` | screenshots and color picking for apps, through the portal |
 | `bluez` | Bluetooth in quick settings |
 | `networkmanager` | the network icon |
 
@@ -202,12 +201,17 @@ Logs: `journalctl --user -u gnutshell.service -b`.
   `org.gnome.shell.keybindings`. Each one saves a PNG in
   `Pictures/Screenshots`, copies the image to the clipboard and shows a
   notification. gnutshell also provides `org.gnome.Shell.Screenshot` for the
-  GNOME portal and gnome-screenshot. As in gnome-shell, only the portal,
-  gsd-media-keys and the owner of `org.gnome.Screenshot` may call it, and not
-  while the screen is locked. While selecting, `P` puts the pointer in the
-  picture, where it was when you pressed `Print`; the other keys leave it out. The captured area flashes, unless
-  animations are off. The API also does color picking: the pixel under a
-  click, with a preview of the color and its hex code next to the pointer.
+  GNOME portal and gsd-media-keys. As in gnome-shell, only the owners of the
+  portal's and gsd-media-keys' bus names may call it, and not while the screen
+  is locked; `org.gnome.Screenshot`, and so the `gnome-screenshot` tool, is
+  not allowed. A file name given to it must be a plain name, which never
+  overwrites, or an absolute path, which replaces what is there, as in
+  gnome-shell. With `org.gnome.desktop.lockdown disable-save-to-disk` on,
+  nothing is saved: the keys only copy, and the methods that save refuse.
+  While selecting, `P` puts the pointer in the picture, where it was when you
+  pressed `Print`; the other keys leave it out. The captured area flashes,
+  unless animations are off. The API also does color picking: the pixel under
+  a click, with a preview of the color and its hex code next to the pointer.
 - Quick settings: the gear button left of the power button opens switches for
   the dark style (`color-scheme`), night light and Do Not Disturb. They change
   the GNOME settings, so GNOME Settings shows the same. Night light still
@@ -462,6 +466,12 @@ All mutter options work (`--help`).
 
 ## Caveats
 
+- **Not security audited.** The screenshot API, like gnome-shell's, trusts
+  whoever owns certain names on the session bus, and a name proves nothing by
+  itself. Keep `xdg-desktop-portal-gnome` and gnome-settings-daemon installed,
+  so that their services hold those names. While such a service is not
+  running, another program of yours could take its name. Programs you run
+  outside a sandbox should be ones you trust.
 - **libmutter has no stable ABI.** The soname changes with every GNOME release
   (`libmutter-51`). After a mutter upgrade, re-check `src/ffi.rs`, especially
   `MetaPluginClass`, which must match `meta/meta-plugin.h` field for field. Bump
