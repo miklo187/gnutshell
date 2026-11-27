@@ -269,7 +269,9 @@ All mutter options work (`--help`).
 - **Notifications:** per-app notification settings,
   sounds and `org.gtk.Notifications` are not supported (GTK apps fall back to
   `org.freedesktop.Notifications`).
-- **No keyring prompt yet.** Keyring unlock prompts come from
-  gcr's system prompter, which gnome-shell normally replaces.
+- **Keyring prompts are not drawn by gnutshell.** gnome-shell shows its own.
+  Here D-Bus starts `/usr/lib/gcr-prompter` (Arch package `gcr`, not `gcr-4`),
+  which opens an ordinary window: other windows can cover it, and it doesn't
+  grab the keyboard. Without that package, prompts can't be shown.
 - **Icons support only SVG and PNG.** XPM files are skipped, and the generic
   fallback icon is shown instead.
