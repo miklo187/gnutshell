@@ -85,6 +85,30 @@ pub fn activation_token(display: *mut MetaDisplay, timestamp: u32) -> Option<Str
     }
 }
 
+/// Put `text` on the clipboard. The shell keeps it until something else
+/// takes the clipboard. `false` if mutter could not create the source.
+pub fn set_clipboard(display: *mut MetaDisplay, text: &str) -> bool {
+    let bytes = glib::Bytes::from(text.as_bytes());
+    unsafe {
+        let mut err = std::ptr::null_mut();
+        let source = ffi::meta_selection_source_memory_new(
+            c"text/plain;charset=utf-8".as_ptr(),
+            bytes.to_glib_none().0,
+            &mut err,
+        );
+        if source.is_null() {
+            let err: glib::Error = from_glib_full(err);
+            glib::g_warning!("gnutshell", "could not copy to the clipboard: {err}");
+            return false;
+        }
+        let selection = ffi::meta_display_get_selection(display);
+        ffi::meta_selection_set_owner(selection, ffi::META_SELECTION_CLIPBOARD, source);
+        // The selection holds its own reference.
+        gobject_sys::g_object_unref(source as *mut gobject_sys::GObject);
+        true
+    }
+}
+
 /// An actor showing `content` (a `ClutterContent`) at `size` x `size`,
 /// aspect preserved. Floating until parented.
 pub unsafe fn icon_actor(content: &glib::Object, size: f32) -> *mut ClutterActor {

@@ -23,7 +23,8 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 - Notifications: gnutshell is the `org.freedesktop.Notifications` service. A
   banner below the panel shows the icon or image, app name, title, up to three
   lines of text and up to three action buttons. Click the banner for the default
-  action, or ✕ to dismiss it. One banner shows at a time and the rest queue.
+  action, ✕ to dismiss it, or the copy button to put the title and full body
+  on the clipboard. One banner shows at a time and the rest queue.
   Banners hide after 5 s (or the app's timeout, at most 30 s), and stay while
   the pointer is over them; critical ones stay until dismissed. Nothing shows
   on the lock screen; waiting notifications show after unlock. Over a

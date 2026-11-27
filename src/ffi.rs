@@ -52,6 +52,8 @@ opaque!(
     cairo_surface_t,
     ClutterInputDevice,
     MetaKeymapDescription,
+    MetaSelection,
+    MetaSelectionSource,
 );
 
 /// MetaWindowActor is a ClutterActor subclass; we only ever pass it around.
@@ -226,6 +228,8 @@ pub struct PolkitAgentListenerClass {
 pub const POLKIT_ERROR_FAILED: c_int = 0;
 pub const POLKIT_ERROR_CANCELLED: c_int = 1;
 pub const POLKIT_AGENT_REGISTER_FLAGS_NONE: c_int = 0;
+
+pub const META_SELECTION_CLIPBOARD: c_int = 1; // MetaSelectionType
 
 // ---------------------------------------------------------------- functions
 
@@ -606,6 +610,19 @@ unsafe extern "C" {
     ) -> c_uint;
     pub fn meta_display_ungrab_accelerator(display: *mut MetaDisplay, action: c_uint) -> gboolean;
     pub fn clutter_input_device_get_device_node(device: *mut ClutterInputDevice) -> *const c_char;
+
+    // clipboard
+    pub fn meta_display_get_selection(display: *mut MetaDisplay) -> *mut MetaSelection;
+    pub fn meta_selection_source_memory_new(
+        mimetype: *const c_char,
+        content: *mut glib_sys::GBytes,
+        error: *mut *mut GError,
+    ) -> *mut MetaSelectionSource;
+    pub fn meta_selection_set_owner(
+        selection: *mut MetaSelection,
+        selection_type: c_int, // MetaSelectionType
+        owner: *mut MetaSelectionSource,
+    );
 
     // libsystemd
     pub fn sd_notify(unset_environment: c_int, state: *const c_char) -> c_int;

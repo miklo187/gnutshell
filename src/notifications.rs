@@ -71,6 +71,7 @@ const PADDING: f32 = 14.0;
 const SPACING: f32 = 8.0;
 const ICON_SIZE: f32 = 40.0;
 const CLOSE_SIZE: f32 = 24.0;
+const COPY_ICON_SIZE: f32 = 14.0;
 const BUTTON_HEIGHT: f32 = 32.0;
 const MAX_BUTTONS: usize = 3;
 const MAX_BODY_LINES: f32 = 3.0;
@@ -131,6 +132,16 @@ pub struct Notification {
 }
 
 impl Notification {
+    /// What the copy button puts on the clipboard: the title and the whole
+    /// body, including lines the banner cuts off.
+    fn copy_text(&self) -> String {
+        [self.summary.as_str(), self.body.as_str()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// How long the banner stays; `None` means until dismissed.
     fn timeout(&self) -> Option<Duration> {
         if self.critical {
@@ -554,7 +565,8 @@ impl Notifications {
                 ffi::clutter_actor_set_position(icon, x, PADDING);
                 x += ICON_SIZE + 12.0;
             }
-            let text_width = width - x - PADDING - CLOSE_SIZE - SPACING;
+            // Room for the copy and close buttons.
+            let text_width = width - x - PADDING - 2.0 * (CLOSE_SIZE + SPACING);
 
             let mut y = PADDING - 2.0;
             let lines = [
@@ -599,6 +611,28 @@ impl Notifications {
                 Some(true.to_value())
             });
 
+            let text = n.copy_text();
+            if !text.is_empty() {
+                let copy = ui::button("", CLOSE_SIZE, CLOSE_SIZE, &ui::BUTTON_COLOR);
+                ffi::clutter_actor_add_child(self.root, copy);
+                ffi::clutter_actor_set_position(copy, width - 2.0 * (CLOSE_SIZE + SPACING), SPACING);
+                self.set_button_icon(copy, "edit-copy-symbolic", "⧉", scale);
+                let weak = Rc::downgrade(self);
+                // Stays open; the check mark confirms the copy.
+                gobj(copy).connect_local("button-press-event", false, move |args| {
+                    let button = args[0].get::<glib::Object>().ok();
+                    with(&weak, |s| {
+                        if let Some(button) = &button
+                            && ui::set_clipboard(s.display, &text)
+                        {
+                            let button = button.as_ptr() as *mut ClutterActor;
+                            s.set_button_icon(button, "object-select-symbolic", "✓", scale);
+                        }
+                    });
+                    Some(true.to_value())
+                });
+            }
+
             let count = n.buttons.len().min(MAX_BUTTONS);
             if count > 0 {
                 let w = ((width - 2.0 * PADDING - (count - 1) as f32 * SPACING) / count as f32).floor();
@@ -619,6 +653,27 @@ impl Notifications {
             ffi::clutter_actor_set_size(self.root, width, y);
         }
         self.place();
+    }
+
+    /// Replace what is in a square header button with a symbolic icon, or
+    /// with `fallback` text if the icon theme lacks it.
+    fn set_button_icon(&self, button: *mut ClutterActor, name: &str, fallback: &str, scale: f32) {
+        unsafe {
+            ffi::clutter_actor_destroy_all_children(button);
+            let icon = icons::symbolic(name, &ui::TEXT_COLOR, COPY_ICON_SIZE, scale, self.stage);
+            let child = match &icon {
+                Some(content) => ui::icon_actor(content, COPY_ICON_SIZE),
+                None => ui::label(ui::BODY_FONT, fallback, &ui::TEXT_COLOR),
+            };
+            ffi::clutter_actor_add_child(button, child);
+            let w = ffi::clutter_actor_get_width(child);
+            let h = ffi::clutter_actor_get_height(child);
+            ffi::clutter_actor_set_position(
+                child,
+                ((CLOSE_SIZE - w) / 2.0).floor(),
+                ((CLOSE_SIZE - h) / 2.0).floor(),
+            );
+        }
     }
 
     /// Top center of the primary monitor, below the panel, above everything.
@@ -874,6 +929,17 @@ mod tests {
         assert_eq!(t(false, 8000), Some(Duration::from_secs(8)));
         assert_eq!(t(false, i32::MAX), Some(MAX_TIMEOUT));
         assert_eq!(t(true, 1000), None);
+    }
+
+    #[test]
+    fn copies_title_and_body() {
+        let t = |summary: &str, body: &str| {
+            Notification { summary: summary.into(), body: body.into(), ..Default::default() }.copy_text()
+        };
+        assert_eq!(t("Title", "one\ntwo"), "Title\none\ntwo");
+        assert_eq!(t("Title", ""), "Title");
+        assert_eq!(t("", "body"), "body");
+        assert_eq!(t("", ""), "");
     }
 
     #[test]
