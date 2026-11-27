@@ -464,6 +464,21 @@ unsafe extern "C" {
     pub fn meta_window_get_stable_sequence(window: *mut MetaWindow) -> u32;
     pub fn meta_window_minimize(window: *mut MetaWindow);
     pub fn clutter_actor_set_clip_to_allocation(actor: *mut ClutterActor, clip: gboolean);
+    // window menu
+    pub fn meta_window_can_minimize(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_window_can_maximize(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_window_can_close(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_window_is_maximized(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_window_is_above(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_window_is_always_on_all_workspaces(window: *mut MetaWindow) -> gboolean;
+    pub fn meta_window_maximize(window: *mut MetaWindow);
+    pub fn meta_window_unmaximize(window: *mut MetaWindow);
+    pub fn meta_window_make_above(window: *mut MetaWindow);
+    pub fn meta_window_unmake_above(window: *mut MetaWindow);
+    pub fn meta_window_stick(window: *mut MetaWindow);
+    pub fn meta_window_unstick(window: *mut MetaWindow);
+    pub fn meta_window_change_workspace_by_index(window: *mut MetaWindow, index: c_int, append: gboolean);
+    pub fn meta_window_delete(window: *mut MetaWindow, timestamp: u32);
     pub fn meta_window_get_frame_rect(window: *mut MetaWindow, rect: *mut MtkRectangle);
     pub fn clutter_text_set_ellipsize(text: *mut ClutterText, mode: c_int);
     pub fn clutter_text_set_line_wrap(text: *mut ClutterText, wrap: gboolean);

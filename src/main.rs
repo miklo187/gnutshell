@@ -23,6 +23,7 @@ mod status;
 mod switcher;
 mod taskbar;
 mod ui;
+mod window_menu;
 mod windows;
 mod workspaces;
 

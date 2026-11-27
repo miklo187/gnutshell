@@ -43,8 +43,12 @@ struct Item {
     drawn: (String, f32),
 }
 
+/// Opens the menu of a window at a point in stage coordinates.
+type MenuHandler = Rc<dyn Fn(glib::Object, f32, f32)>;
+
 #[derive(Default)]
 struct State {
+    menu: Option<MenuHandler>,
     items: Vec<Item>,
     /// Origin of the bar in stage coordinates, and its width.
     geometry: (f32, f32, f32),
@@ -78,6 +82,11 @@ impl Taskbar {
 
             Rc::new(Self { display, stage, bar, preview, state: RefCell::default() })
         }
+    }
+
+    /// `handler` runs on a right click on an entry.
+    pub fn set_menu_handler(&self, handler: impl Fn(glib::Object, f32, f32) + 'static) {
+        self.state.borrow_mut().menu = Some(Rc::new(handler));
     }
 
     /// Place the bar along the bottom of the monitor at `geo`.
@@ -193,12 +202,27 @@ impl Taskbar {
         });
         let weak = Rc::downgrade(self);
         object.connect_local("button-press-event", false, move |args| {
-            if unsafe { ffi::clutter_event_get_button(ui::event_arg(args)) } == 1 {
-                with(&weak, |t| t.click(id));
+            let event = ui::event_arg(args);
+            match unsafe { ffi::clutter_event_get_button(event) } {
+                1 => with(&weak, |t| t.click(id)),
+                3 => with(&weak, |t| t.open_menu(id, ui::event_coords(event))),
+                _ => {}
             }
             Some(true.to_value())
         });
         actor
+    }
+
+    fn open_menu(&self, id: u64, at: Option<(f32, f32)>) {
+        let found = {
+            let state = self.state.borrow();
+            let window = state.items.iter().find(|i| windows::id(&i.window) == id).map(|i| i.window.clone());
+            window.zip(state.menu.clone()).map(|(w, m)| (w, m, state.geometry.1))
+        };
+        if let (Some((window, handler, top)), Some((x, _))) = (found, at) {
+            // From the bar's top edge, so that the menu opens above it.
+            handler(window, x, top);
+        }
     }
 
     /// Focus the window, or minimize it if it has the focus already.

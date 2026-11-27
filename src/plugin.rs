@@ -5,6 +5,7 @@ use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
 use crate::overview::Overview;
 use crate::taskbar::Taskbar;
+use crate::window_menu::WindowMenu;
 use crate::session::SessionMenu;
 use crate::switcher::Switcher;
 use crate::ui::gobj;
@@ -51,6 +52,8 @@ pub trait MetaPluginImpl: ObjectImpl + ObjectSubclass<Type: IsA<MetaPlugin>> {
     /// Animate a workspace switch; call `meta_plugin_switch_workspace_completed` when done.
     fn switch_workspace(&self, from: i32, to: i32);
     fn kill_switch_workspace(&self);
+    /// Show the menu of `window` at `x`, `y` in stage coordinates.
+    fn show_window_menu(&self, window: *mut ffi::MetaWindow, x: i32, y: i32);
 }
 
 unsafe impl<T: MetaPluginImpl> IsSubclassable<T> for MetaPlugin {
@@ -66,6 +69,8 @@ unsafe impl<T: MetaPluginImpl> IsSubclassable<T> for MetaPlugin {
         klass.keybinding_filter = Some(vfunc_keybinding_filter::<T>);
         klass.switch_workspace = Some(vfunc_switch_workspace::<T>);
         klass.kill_switch_workspace = Some(vfunc_kill_switch_workspace::<T>);
+        klass.show_window_menu = Some(vfunc_show_window_menu::<T>);
+        klass.show_window_menu_for_rect = Some(vfunc_show_window_menu_for_rect::<T>);
     }
 }
 
@@ -117,6 +122,33 @@ unsafe extern "C" fn vfunc_switch_workspace<T: MetaPluginImpl>(
 
 unsafe extern "C" fn vfunc_kill_switch_workspace<T: MetaPluginImpl>(p: *mut ffi::MetaPlugin) {
     unsafe { imp::<T>(p) }.kill_switch_workspace();
+}
+
+/// `META_WINDOW_MENU_WM`; the other kind, an app menu, is not shown.
+const WM_MENU: std::ffi::c_int = 0;
+
+unsafe extern "C" fn vfunc_show_window_menu<T: MetaPluginImpl>(
+    p: *mut ffi::MetaPlugin,
+    window: *mut ffi::MetaWindow,
+    menu: std::ffi::c_int,
+    x: std::ffi::c_int,
+    y: std::ffi::c_int,
+) {
+    if menu == WM_MENU {
+        unsafe { imp::<T>(p) }.show_window_menu(window, x, y);
+    }
+}
+
+unsafe extern "C" fn vfunc_show_window_menu_for_rect<T: MetaPluginImpl>(
+    p: *mut ffi::MetaPlugin,
+    window: *mut ffi::MetaWindow,
+    menu: std::ffi::c_int,
+    rect: *mut MtkRectangle,
+) {
+    if menu == WM_MENU && !rect.is_null() {
+        let r = unsafe { *rect };
+        unsafe { imp::<T>(p) }.show_window_menu(window, r.x, r.y + r.height);
+    }
 }
 
 // =============================================================================
@@ -176,6 +208,7 @@ mod imp {
         pub(super) shell: RefCell<Option<Shell>>,
         pub(super) launcher: RefCell<Option<Rc<Launcher>>>,
         pub(super) switcher: RefCell<Option<Rc<Switcher>>>,
+        pub(super) window_menu: RefCell<Option<Rc<WindowMenu>>>,
         pub(super) polkit_agent: RefCell<Option<crate::polkit::Agent>>,
         pub(super) session_menu: RefCell<Option<std::rc::Rc<SessionMenu>>>,
         pub(super) input_sources: RefCell<Option<std::rc::Rc<crate::keyboard::InputSources>>>,
@@ -249,6 +282,13 @@ mod imp {
             }
         }
 
+        fn show_window_menu(&self, window: *mut ffi::MetaWindow, x: i32, y: i32) {
+            if !window.is_null() {
+                let window = unsafe { gobj(window) };
+                self.open_window_menu(window, x as f32, y as f32);
+            }
+        }
+
         fn keybinding_filter(&self, binding: *mut ffi::MetaKeyBinding) -> bool {
             if !crate::lockscreen::is_locked() {
                 return false;
@@ -281,6 +321,7 @@ impl imp::GnutshellPlugin {
     fn on_lock_changed(&self, locked: bool) {
         if locked {
             // These hold stage grabs of their own; close them first.
+            self.close_window_menu();
             if let Some((overview, taskbar)) = self.window_views() {
                 overview.hide();
                 taskbar.hide_preview();
@@ -367,6 +408,15 @@ impl imp::GnutshellPlugin {
             crate::icons::watch_theme_changes();
             *self.launcher.borrow_mut() = Some(Launcher::new(display, stage));
             *self.switcher.borrow_mut() = Some(Switcher::new(display, stage));
+            *self.window_menu.borrow_mut() = Some(WindowMenu::new(display, stage));
+            if let Some((_, taskbar)) = self.window_views() {
+                let weak = self.obj().downgrade();
+                taskbar.set_menu_handler(move |window, x, y| {
+                    if let Some(plugin) = weak.upgrade() {
+                        plugin.imp().open_window_menu(window, x, y);
+                    }
+                });
+            }
             *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
             *self.session_menu.borrow_mut() =
                 Some(SessionMenu::new(display, stage, panel, PANEL_HEIGHT as f32));
@@ -510,7 +560,7 @@ impl imp::GnutshellPlugin {
     /// separated by spaces: characters to type, one of `Super`, `Return`,
     /// `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
     /// a raw keysym `0x…` (tap), `down:0x…` / `up:0x…` (hold / release),
-    /// `move:X,Y` (pointer), `click`, `middle-click`, `press` / `release` (primary button), `wheel-up` / `wheel-down`,
+    /// `move:X,Y` (pointer), `click`, `middle-click`, `right-click`, `press` / `release` (primary button), `wheel-up` / `wheel-down`,
     /// or `_` to pause one step. Drives the real
     /// input path headless.
     #[cfg(debug_assertions)]
@@ -526,6 +576,7 @@ impl imp::GnutshellPlugin {
             Click,
             Button(bool),
             MiddleClick,
+            RightClick,
         }
         use Input::*;
         let hex = |t: &str| u32::from_str_radix(t, 16).ok();
@@ -545,6 +596,7 @@ impl imp::GnutshellPlugin {
                 "click" => vec![Click],
                 "press" => vec![Button(true)],
                 "middle-click" => vec![MiddleClick],
+                "right-click" => vec![RightClick],
                 "release" => vec![Button(false)],
                 "wheel-up" => vec![Wheel(ffi::CLUTTER_SCROLL_UP)],
                 "wheel-down" => vec![Wheel(ffi::CLUTTER_SCROLL_DOWN)],
@@ -594,6 +646,11 @@ impl imp::GnutshellPlugin {
                                 const PRIMARY: u32 = 1; // CLUTTER_BUTTON_PRIMARY
                                 for state in [1, 0] { // pressed, released
                                     ffi::clutter_virtual_input_device_notify_button(ptr, now, PRIMARY, state);
+                                }
+                            }
+                            RightClick => {
+                                for state in [1, 0] {
+                                    ffi::clutter_virtual_input_device_notify_button(ptr, now, 3, state);
                                 }
                             }
                             MiddleClick => {
@@ -718,6 +775,26 @@ impl imp::GnutshellPlugin {
         });
     }
 
+    fn open_window_menu(&self, window: glib::Object, x: f32, y: f32) {
+        if crate::lockscreen::is_locked() {
+            return;
+        }
+        if let Some((_, taskbar)) = self.window_views() {
+            taskbar.hide_preview();
+        }
+        let menu = self.window_menu.borrow().clone();
+        if let Some(menu) = menu {
+            menu.open(window, x, y);
+        }
+    }
+
+    fn close_window_menu(&self) {
+        let menu = self.window_menu.borrow().clone();
+        if let Some(menu) = menu {
+            menu.close();
+        }
+    }
+
     /// The overview and the taskbar, without keeping the shell borrowed.
     fn window_views(&self) -> Option<(Rc<Overview>, Rc<Taskbar>)> {
         self.shell.borrow().as_ref().map(|s| (s.overview.clone(), s.taskbar.clone()))
@@ -742,6 +819,7 @@ impl imp::GnutshellPlugin {
             overview.hide();
             taskbar.hide_preview();
         }
+        self.close_window_menu();
         if let Ok(cmd) = std::env::var("GNUTSHELL_LAUNCHER") {
             if let Err(e) = glib::spawn_command_line_async(cmd.as_str()) {
                 glib::g_warning!("gnutshell", "failed to spawn launcher '{cmd}': {e}");
@@ -897,6 +975,9 @@ impl imp::GnutshellPlugin {
         }
         if let Some(sources) = self.input_sources.borrow_mut().take() {
             sources.destroy();
+        }
+        if let Some(menu) = self.window_menu.borrow_mut().take() {
+            menu.destroy();
         }
         if let Some(menu) = self.session_menu.borrow_mut().take() {
             menu.destroy();

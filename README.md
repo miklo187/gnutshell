@@ -28,6 +28,16 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   live preview of the window. Entries shrink as windows are added, down to
   icons only; the bar does not scroll. Like the panel, it reserves screen space
   and hides when the primary monitor shows a fullscreen window.
+- Window menu: right-click a title bar, press Alt+Space
+  (`activate-window-menu`) or right-click a taskbar entry. It offers Minimize,
+  Maximize/Restore, Always on Top, Always on Visible Workspace, Move to
+  Workspace Left/Right and Close; the view does not follow a moved window.
+  Always on Top is grayed out while the window is maximized, because mutter
+  does not keep a maximized window above others. Mouse or keyboard (Up/Down,
+  Enter, Escape). There are no entries for moving or resizing, for other
+  monitors or for screenshots. An app that draws its own title bar and does not
+  ask for this menu has it only through the other two ways. Tiles in the
+  window overview have no menu.
 - Window overview: the four-square button at the left of the panel shows every
   open window, from all workspaces, as a tile with a live picture. Click a tile
   or use the arrow keys and Enter; Escape or a click outside closes it. When
@@ -224,7 +234,7 @@ Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 **Keyboard-driven test** (debug builds only): `GNUTSHELL_DEBUG_KEYS="<ms>:<tokens>"`
 types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
 characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` /
-`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `click`, `middle-click`, `press` / `release`, `wheel-up` / `wheel-down`, and `_` (pause). `GNUTSHELL_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
+`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `click`, `middle-click`, `right-click`, `press` / `release`, `wheel-up` / `wheel-down`, and `_` (pause). `GNUTSHELL_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
 
 `GNUTSHELL_DEBUG_PAM_USER=<user>` checks lock screen passwords against another
@@ -283,6 +293,7 @@ All mutter options work (`--help`).
 | `src/background.rs` | Desktop background: settings, picture loading |
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
+| `src/window_menu.rs` | Window menu: always on top, workspace moves |
 | `src/taskbar.rs` | Taskbar with window previews |
 | `src/overview.rs` | Window overview tiles and their scrollbar |
 | `src/windows.rs` | Window list, change tracking and thumbnails for both |
