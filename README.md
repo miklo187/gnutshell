@@ -53,8 +53,13 @@ without it; only that feature is then missing.
 | `bluez` | Bluetooth in quick settings |
 | `networkmanager` | the network icon |
 
-Build and install, as your normal user (the script asks for `sudo` itself; it
-needs Rust 1.92 or newer):
+**The install script changes system files with `sudo`:** it adds the program,
+a login session, a PAM configuration for the lock screen and systemd user units
+under `/usr` and `/etc`. Read [`dist/install.sh`](dist/install.sh) before you
+run it. There is no warranty (see [License](#license)).
+
+Build and install, as your normal user (the script asks for `sudo` itself; the
+build needs Rust 1.92 or newer):
 
 ```sh
 git clone https://github.com/miklo187/gnutshell.git
