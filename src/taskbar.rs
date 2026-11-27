@@ -1,10 +1,14 @@
 //! The bar at the bottom of the primary monitor: one entry per open window,
 //! with a live preview while the pointer rests on an entry.
+//!
+//! Pinned apps come first, in pin order. A pinned app without a window is an
+//! icon that starts it; while it has windows, their entries take that place.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay};
+use crate::pins::{self, Pins, Place};
 use crate::ui::{self, gobj};
-use crate::windows;
-use glib::prelude::*;
+use crate::windows::{self, MenuTarget};
+use gio::prelude::*;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -14,6 +18,8 @@ const ITEM_MAX_WIDTH: f32 = 220.0;
 const ITEM_GAP: f32 = 4.0;
 const ITEM_MARGIN: f32 = 4.0;
 const ICON_SIZE: f32 = 20.0;
+/// Width of the icon of a pinned app without a window.
+const SHORTCUT_WIDTH: f32 = 40.0;
 /// Narrower entries show only their icon.
 const LABEL_MIN_WIDTH: f32 = 72.0;
 const MINIMIZED_OPACITY: u8 = 0x80;
@@ -36,15 +42,60 @@ fn item_width(bar: f32, count: usize) -> f32 {
     (room / count as f32).floor().clamp(1.0, ITEM_MAX_WIDTH)
 }
 
+/// One place in the bar.
+#[derive(Debug, PartialEq, Eq)]
+enum Slot {
+    /// An index into the pinned apps: one that has no window.
+    Shortcut(usize),
+    /// An index into the windows.
+    Window(usize),
+}
+
+/// The bar from left to right, given the pinned app ids and the app id of each
+/// window.
+fn arrange(pinned: &[String], windows: &[Option<String>]) -> Vec<Slot> {
+    let mut out = Vec::new();
+    let mut placed = vec![false; windows.len()];
+    for (pin, id) in pinned.iter().enumerate() {
+        let before = out.len();
+        for (index, app) in windows.iter().enumerate() {
+            if !placed[index] && app.as_ref() == Some(id) {
+                placed[index] = true;
+                out.push(Slot::Window(index));
+            }
+        }
+        if out.len() == before {
+            out.push(Slot::Shortcut(pin));
+        }
+    }
+    out.extend((0..windows.len()).filter(|&i| !placed[i]).map(Slot::Window));
+    out
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Key {
+    Window(u64),
+    App(String),
+}
+
+#[derive(Clone)]
+enum Content {
+    Window(glib::Object),
+    Shortcut(gio_unix::DesktopAppInfo),
+}
+
 struct Item {
-    window: glib::Object,
+    key: Key,
+    content: Content,
     actor: *mut ClutterActor,
     /// What the actor was drawn from, to redraw only on change.
     drawn: (String, f32),
+    /// Position and width inside the bar.
+    span: (f32, f32),
 }
 
-/// Opens the menu of a window at a point in stage coordinates.
-type MenuHandler = Rc<dyn Fn(glib::Object, f32, f32)>;
+/// Opens the menu of an entry at a point in stage coordinates.
+type MenuHandler = Rc<dyn Fn(MenuTarget, f32, f32)>;
 
 #[derive(Default)]
 struct State {
@@ -52,8 +103,8 @@ struct State {
     items: Vec<Item>,
     /// Origin of the bar in stage coordinates, and its width.
     geometry: (f32, f32, f32),
-    /// The window under the pointer.
-    hovered: Option<u64>,
+    /// The entry under the pointer.
+    hovered: Option<Key>,
     preview_timeout: Option<glib::SourceId>,
     preview_shown: bool,
     focused: Option<u64>,
@@ -64,11 +115,17 @@ pub struct Taskbar {
     stage: *mut ClutterActor,
     bar: *mut ClutterActor,
     preview: *mut ClutterActor,
+    pins: Rc<Pins>,
     state: RefCell<State>,
 }
 
 impl Taskbar {
-    pub fn new(display: *mut MetaDisplay, stage: *mut ClutterActor, color: &ffi::CoglColor) -> Rc<Self> {
+    pub fn new(
+        display: *mut MetaDisplay,
+        stage: *mut ClutterActor,
+        pins: Rc<Pins>,
+        color: &ffi::CoglColor,
+    ) -> Rc<Self> {
         unsafe {
             let bar = ffi::clutter_actor_new();
             ffi::clutter_actor_set_background_color(bar, color);
@@ -80,12 +137,12 @@ impl Taskbar {
             ffi::clutter_actor_hide(preview);
             ffi::clutter_actor_add_child(stage, preview);
 
-            Rc::new(Self { display, stage, bar, preview, state: RefCell::default() })
+            Rc::new(Self { display, stage, bar, preview, pins, state: RefCell::default() })
         }
     }
 
     /// `handler` runs on a right click on an entry.
-    pub fn set_menu_handler(&self, handler: impl Fn(glib::Object, f32, f32) + 'static) {
+    pub fn set_menu_handler(&self, handler: impl Fn(MenuTarget, f32, f32) + 'static) {
         self.state.borrow_mut().menu = Some(Rc::new(handler));
     }
 
@@ -113,10 +170,15 @@ impl Taskbar {
         }
     }
 
-    /// Bring the entries up to date. Entries of windows that stay keep their
-    /// actor, so the one under the pointer goes on getting events.
+    /// Bring the entries up to date. Entries that stay keep their actor, so
+    /// the one under the pointer goes on getting events.
     pub fn refresh(self: &Rc<Self>) {
-        let list = windows::list(self.display);
+        let windows = windows::list(self.display);
+        let window_apps: Vec<Option<String>> = windows.iter().map(pins::app_id_of).collect();
+        let pinned = self.pins.apps(Place::Taskbar);
+        let pinned_ids: Vec<String> = pinned.iter().map(|(id, _)| id.clone()).collect();
+        let slots = arrange(&pinned_ids, &window_apps);
+
         let focused = windows::focused(self.display);
         let mut old = {
             let mut state = self.state.borrow_mut();
@@ -124,41 +186,68 @@ impl Taskbar {
             std::mem::take(&mut state.items)
         };
         let bar_width = self.state.borrow().geometry.2;
-        let width = item_width(bar_width, list.len());
+        let shortcuts = slots.iter().filter(|s| matches!(s, Slot::Shortcut(_))).count();
+        let shortcut_room = shortcuts as f32 * (SHORTCUT_WIDTH + ITEM_GAP);
+        let window_width = item_width((bar_width - shortcut_room).max(0.0), windows.len());
         let scale = ui::primary_monitor_scale(self.display);
 
         let mut items = Vec::new();
-        for (index, window) in list.into_iter().enumerate() {
-            let id = windows::id(&window);
-            let mut item = match old.iter().position(|i| windows::id(&i.window) == id) {
-                Some(found) => old.remove(found),
-                None => Item { actor: self.new_item(id), window, drawn: (String::new(), -1.0) },
+        let mut x = ITEM_MARGIN;
+        for slot in slots {
+            let (key, content, width) = match slot {
+                Slot::Window(i) => {
+                    let window = windows[i].clone();
+                    (Key::Window(windows::id(&window)), Content::Window(window), window_width)
+                }
+                Slot::Shortcut(i) => {
+                    let (id, app) = pinned[i].clone();
+                    (Key::App(id), Content::Shortcut(app), SHORTCUT_WIDTH)
+                }
             };
-            let title = windows::title(&item.window);
-            // The icon can be known only some time after the window appears.
-            let icon = windows::icon(&item.window, ICON_SIZE, scale, self.stage);
-            let key = (format!("{title}\u{1}{}", icon.is_some()), width);
-            if item.drawn != key {
-                draw_item(item.actor, &title, icon.as_ref(), width);
-                item.drawn = key;
+            let mut item = match old.iter().position(|i| i.key == key) {
+                Some(found) => old.remove(found),
+                None => Item {
+                    actor: self.new_item(key.clone()),
+                    key,
+                    content: content.clone(),
+                    drawn: (String::new(), -1.0),
+                    span: (0.0, 0.0),
+                },
+            };
+            item.content = content;
+            let (title, icon, labelled, minimized) = match &item.content {
+                Content::Window(window) => (
+                    windows::title(window),
+                    // The icon can be known only some time after the window appears.
+                    windows::icon(window, ICON_SIZE, scale, self.stage),
+                    width >= LABEL_MIN_WIDTH,
+                    windows::is_minimized(window),
+                ),
+                Content::Shortcut(app) => (
+                    app.display_name().to_string(),
+                    crate::icons::content(app.icon().as_ref(), ICON_SIZE, scale, self.stage),
+                    false,
+                    false,
+                ),
+            };
+            let drawn = (format!("{title}\u{1}{}", icon.is_some()), width);
+            if item.drawn != drawn {
+                draw_item(item.actor, &title, icon.as_ref(), width, labelled || icon.is_none());
+                item.drawn = drawn;
             }
+            item.span = (x, width);
             unsafe {
-                ffi::clutter_actor_set_position(
-                    item.actor,
-                    ITEM_MARGIN + index as f32 * (width + ITEM_GAP),
-                    ITEM_MARGIN,
-                );
-                let opacity = if windows::is_minimized(&item.window) { MINIMIZED_OPACITY } else { 0xff };
+                ffi::clutter_actor_set_position(item.actor, x, ITEM_MARGIN);
+                let opacity = if minimized { MINIMIZED_OPACITY } else { 0xff };
                 ffi::clutter_actor_set_opacity(item.actor, opacity);
             }
+            x += width + ITEM_GAP;
             items.push(item);
         }
-        let hovered = self.state.borrow().hovered;
-        for item in &items {
-            self.paint_item(item.actor, windows::id(&item.window), focused, hovered);
-        }
-        let hovered_gone = hovered.is_some_and(|h| !items.iter().any(|i| windows::id(&i.window) == h));
+        let hovered = self.state.borrow().hovered.clone();
+        let hovered_gone = hovered.is_some_and(|h| !items.iter().any(|i| i.key == h));
         self.state.borrow_mut().items = items;
+        self.repaint();
         // Not under the borrow: destroying an actor can send crossing events.
         for item in old {
             unsafe { ffi::clutter_actor_destroy(item.actor) };
@@ -171,18 +260,7 @@ impl Taskbar {
         }
     }
 
-    fn paint_item(&self, actor: *mut ClutterActor, id: u64, focused: Option<u64>, hovered: Option<u64>) {
-        let color = if focused == Some(id) {
-            FOCUS_COLOR
-        } else if hovered == Some(id) {
-            HOVER_COLOR
-        } else {
-            ITEM_COLOR
-        };
-        unsafe { ffi::clutter_actor_set_background_color(actor, &color) };
-    }
-
-    fn new_item(self: &Rc<Self>, id: u64) -> *mut ClutterActor {
+    fn new_item(self: &Rc<Self>, key: Key) -> *mut ClutterActor {
         let actor = unsafe {
             let actor = ffi::clutter_actor_new();
             ffi::clutter_actor_set_reactive(actor, 1);
@@ -191,21 +269,23 @@ impl Taskbar {
         };
         let object = unsafe { gobj(actor) };
         let weak = Rc::downgrade(self);
+        let own = key.clone();
         object.connect_local("enter-event", false, move |_| {
-            with(&weak, |t| t.enter(id));
+            with(&weak, |t| t.enter(own.clone()));
             Some(false.to_value())
         });
         let weak = Rc::downgrade(self);
+        let own = key.clone();
         object.connect_local("leave-event", false, move |_| {
-            with(&weak, |t| t.leave(id));
+            with(&weak, |t| t.leave(&own));
             Some(false.to_value())
         });
         let weak = Rc::downgrade(self);
         object.connect_local("button-press-event", false, move |args| {
             let event = ui::event_arg(args);
             match unsafe { ffi::clutter_event_get_button(event) } {
-                1 => with(&weak, |t| t.click(id)),
-                3 => with(&weak, |t| t.open_menu(id, ui::event_coords(event))),
+                1 => with(&weak, |t| t.click(&key)),
+                3 => with(&weak, |t| t.open_menu(&key, ui::event_coords(event))),
                 _ => {}
             }
             Some(true.to_value())
@@ -213,39 +293,49 @@ impl Taskbar {
         actor
     }
 
-    fn open_menu(&self, id: u64, at: Option<(f32, f32)>) {
-        let found = {
+    fn content(&self, key: &Key) -> Option<Content> {
+        self.state.borrow().items.iter().find(|i| &i.key == key).map(|i| i.content.clone())
+    }
+
+    fn open_menu(&self, key: &Key, at: Option<(f32, f32)>) {
+        let (handler, top) = {
             let state = self.state.borrow();
-            let window = state.items.iter().find(|i| windows::id(&i.window) == id).map(|i| i.window.clone());
-            window.zip(state.menu.clone()).map(|(w, m)| (w, m, state.geometry.1))
+            (state.menu.clone(), state.geometry.1)
         };
-        if let (Some((window, handler, top)), Some((x, _))) = (found, at) {
+        let target = match (self.content(key), key) {
+            (Some(Content::Window(window)), _) => MenuTarget::Window(window),
+            (Some(Content::Shortcut(_)), Key::App(id)) => MenuTarget::App(id.clone()),
+            _ => return,
+        };
+        if let (Some(handler), Some((x, _))) = (handler, at) {
             // From the bar's top edge, so that the menu opens above it.
-            handler(window, x, top);
+            handler(target, x, top);
         }
     }
 
-    /// Focus the window, or minimize it if it has the focus already.
-    fn click(&self, id: u64) {
+    /// Start a pinned app. For a window: focus it, or minimize it if it has
+    /// the focus already.
+    fn click(&self, key: &Key) {
         if crate::lockscreen::is_locked() {
             return;
         }
-        let found = {
-            let state = self.state.borrow();
-            let item = state.items.iter().find(|i| windows::id(&i.window) == id);
-            item.map(|i| (i.window.clone(), state.focused == Some(id)))
-        };
-        let Some((window, has_focus)) = found else { return };
+        let Some(content) = self.content(key) else { return };
         self.hide_preview();
-        if has_focus && !windows::is_minimized(&window) {
-            unsafe { ffi::meta_window_minimize(windows::ptr(&window)) };
-        } else {
-            windows::activate(self.display, &window);
+        match content {
+            Content::Shortcut(app) => pins::launch(self.display, &app, false),
+            Content::Window(window) => {
+                let has_focus = self.state.borrow().focused == Some(windows::id(&window));
+                if has_focus && !windows::is_minimized(&window) {
+                    unsafe { ffi::meta_window_minimize(windows::ptr(&window)) };
+                } else {
+                    windows::activate(self.display, &window);
+                }
+            }
         }
     }
 
-    fn enter(self: &Rc<Self>, id: u64) {
-        self.state.borrow_mut().hovered = Some(id);
+    fn enter(self: &Rc<Self>, key: Key) {
+        self.state.borrow_mut().hovered = Some(key);
         self.repaint();
         // Moving along the bar switches an open preview at once.
         if self.state.borrow().preview_shown {
@@ -263,8 +353,8 @@ impl Taskbar {
         self.state.borrow_mut().preview_timeout = Some(source);
     }
 
-    fn leave(self: &Rc<Self>, id: u64) {
-        if self.state.borrow().hovered != Some(id) {
+    fn leave(self: &Rc<Self>, key: &Key) {
+        if self.state.borrow().hovered.as_ref() != Some(key) {
             return;
         }
         self.state.borrow_mut().hovered = None;
@@ -285,7 +375,15 @@ impl Taskbar {
     fn repaint(&self) {
         let state = self.state.borrow();
         for item in &state.items {
-            self.paint_item(item.actor, windows::id(&item.window), state.focused, state.hovered);
+            let focused = matches!(item.key, Key::Window(id) if state.focused == Some(id));
+            let hovered = state.hovered.as_ref() == Some(&item.key);
+            let color = match &item.key {
+                _ if focused => FOCUS_COLOR,
+                _ if hovered => HOVER_COLOR,
+                Key::App(_) => ui::TRANSPARENT,
+                Key::Window(_) => ITEM_COLOR,
+            };
+            unsafe { ffi::clutter_actor_set_background_color(item.actor, &color) };
         }
     }
 
@@ -296,29 +394,38 @@ impl Taskbar {
         }
     }
 
+    /// The window's title and picture, or a pinned app's name.
     fn show_preview(&self) {
         let found = {
             let state = self.state.borrow();
             let (x, y, bar_width) = state.geometry;
-            state.hovered.and_then(|hovered| {
-                let index = state.items.iter().position(|i| windows::id(&i.window) == hovered)?;
-                let item = &state.items[index];
-                let width = item_width(bar_width, state.items.len());
-                let center = x + ITEM_MARGIN + index as f32 * (width + ITEM_GAP) + width / 2.0;
-                Some((item.window.clone(), center, x, y, bar_width))
+            state.hovered.as_ref().and_then(|hovered| {
+                let item = state.items.iter().find(|i| &i.key == hovered)?;
+                let center = x + item.span.0 + item.span.1 / 2.0;
+                Some((item.content.clone(), center, x, y, bar_width))
             })
         };
-        let Some((window, center, bar_x, bar_y, bar_width)) = found else { return };
+        let Some((content, center, bar_x, bar_y, bar_width)) = found else { return };
         self.cancel_timeout();
         unsafe {
             ffi::clutter_actor_destroy_all_children(self.preview);
-            let thumbnail = windows::thumbnail(&window, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+            let (title, thumbnail, least_width) = match &content {
+                Content::Window(window) => (
+                    windows::title(window),
+                    windows::thumbnail(window, PREVIEW_WIDTH, PREVIEW_HEIGHT),
+                    220.0,
+                ),
+                Content::Shortcut(app) => (app.display_name().to_string(), None, 0.0),
+            };
+            let title = ui::label(ui::BODY_FONT, &title, &ui::TEXT_COLOR);
             let (thumb_width, thumb_height) = thumbnail.map_or((0.0, 0.0), |(_, w, h)| (w, h));
-            let inner = thumb_width.max(220.0);
+            let inner = match content {
+                Content::Window(_) => thumb_width.max(least_width),
+                Content::Shortcut(_) => ffi::clutter_actor_get_width(title).min(PREVIEW_WIDTH).ceil(),
+            };
             let width = inner + 2.0 * PREVIEW_PADDING;
             let height = 2.0 * PREVIEW_PADDING + PREVIEW_TITLE_HEIGHT + thumb_height;
 
-            let title = ui::label(ui::BODY_FONT, &windows::title(&window), &ui::TEXT_COLOR);
             ffi::clutter_text_set_ellipsize(title as *mut ffi::ClutterText, ffi::PANGO_ELLIPSIZE_END);
             ffi::clutter_actor_set_width(title, inner);
             ffi::clutter_actor_set_position(title, PREVIEW_PADDING, PREVIEW_PADDING);
@@ -359,13 +466,18 @@ impl Taskbar {
     }
 }
 
-fn draw_item(actor: *mut ClutterActor, title: &str, icon: Option<&glib::Object>, width: f32) {
+fn draw_item(
+    actor: *mut ClutterActor,
+    title: &str,
+    icon: Option<&glib::Object>,
+    width: f32,
+    with_label: bool,
+) {
     let height = HEIGHT as f32 - 2.0 * ITEM_MARGIN;
     unsafe {
         ffi::clutter_actor_destroy_all_children(actor);
         ffi::clutter_actor_set_size(actor, width, height);
         ffi::clutter_actor_set_clip_to_allocation(actor, 1);
-        let with_label = width >= LABEL_MIN_WIDTH || icon.is_none();
         let icon_x = if with_label { 8.0 } else { ((width - ICON_SIZE) / 2.0).floor() };
         windows::add_icon(actor, icon, ICON_SIZE, icon_x, ((height - ICON_SIZE) / 2.0).floor());
         if with_label {
@@ -389,6 +501,19 @@ fn with(weak: &Weak<Taskbar>, f: impl FnOnce(&Rc<Taskbar>)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_apps_come_first_and_give_way_to_their_windows() {
+        let pinned = ["files".to_owned(), "mail".to_owned()];
+        let app = |id: &str| Some(id.to_owned());
+        let windows = [app("editor"), app("files"), None, app("files")];
+        assert_eq!(
+            arrange(&pinned, &windows),
+            [Slot::Window(1), Slot::Window(3), Slot::Shortcut(1), Slot::Window(0), Slot::Window(2)]
+        );
+        assert_eq!(arrange(&pinned, &[]), [Slot::Shortcut(0), Slot::Shortcut(1)]);
+        assert_eq!(arrange(&[], &[None]), [Slot::Window(0)]);
+    }
 
     #[test]
     fn entries_shrink_to_share_the_bar() {

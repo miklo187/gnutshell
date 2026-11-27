@@ -13,7 +13,7 @@ use crate::ffi::{self, ClutterActor, MetaDisplay, MetaWorkspace};
 use crate::ui::{self, gobj};
 use gio::prelude::*;
 use glib::translate::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
@@ -59,9 +59,15 @@ pub fn plan(empty: &[bool], active: usize) -> (usize, Vec<usize>) {
     (append, remove)
 }
 
+/// The launcher and overview buttons left of the indicator.
+pub const PANEL_BUTTONS_WIDTH: f32 =
+    crate::launcher::PANEL_BUTTON_WIDTH + crate::overview::PANEL_BUTTON_WIDTH;
+
 pub struct Workspaces {
     display: *mut MetaDisplay,
     indicator: *mut ClutterActor,
+    /// Where the indicator starts in the panel.
+    left: Cell<f32>,
     mutter: Option<gio::Settings>,
     state: RefCell<State>,
 }
@@ -84,7 +90,8 @@ impl Workspaces {
             let indicator = ffi::clutter_actor_new();
             ffi::clutter_actor_set_reactive(indicator, 1);
             ffi::clutter_actor_add_child(panel, indicator);
-            Rc::new(Self { display, indicator, mutter, state: RefCell::default() })
+            let left = Cell::new(PANEL_BUTTONS_WIDTH);
+            Rc::new(Self { display, indicator, left, mutter, state: RefCell::default() })
         };
         ws.connect_signals();
         ws.track_workspaces();
@@ -298,11 +305,14 @@ impl Workspaces {
                 x += w + DOT_GAP;
             }
             ffi::clutter_actor_set_size(self.indicator, x - DOT_GAP + INDICATOR_PADDING, height);
-            // Right of the launcher and overview buttons.
-            let left = crate::launcher::PANEL_BUTTON_WIDTH + crate::overview::PANEL_BUTTON_WIDTH;
-            ffi::clutter_actor_set_position(self.indicator, left, 0.0);
+            ffi::clutter_actor_set_position(self.indicator, self.left.get(), 0.0);
             ffi::clutter_actor_show(self.indicator);
         }
+    }
+
+    pub fn set_left(&self, left: f32) {
+        self.left.set(left);
+        unsafe { ffi::clutter_actor_set_position(self.indicator, left, 0.0) };
     }
 
     pub fn relayout(self: &Rc<Self>) {

@@ -28,10 +28,23 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   live preview of the window. Entries shrink as windows are added, down to
   icons only; the bar does not scroll. Like the panel, it reserves screen space
   and hides when the primary monitor shows a fullscreen window.
+- Pinned apps, as shortcuts on the taskbar and on the top bar: choose "Pin to
+  Taskbar" or "Pin to Top Bar" in the window menu of a running app. On the
+  taskbar, pinned apps come first, in the order pinned. Without a window, a
+  pinned app is an icon that starts it (hover shows its name); while it has
+  windows, their entries take that place. On the top bar, pinned apps are
+  icons right of the panel buttons, with a line under those that are running.
+  A click starts the app, focuses the window of it used last, or minimizes that
+  window if it already has the focus. Right-click a shortcut for Open (Open New
+  Window while it runs) and the unpin entries. The list is stored in
+  `~/.config/gnutshell/pinned.ini`; it is not GNOME's dash favorites. Apps
+  can't be pinned from the app launcher, shortcuts can't be reordered by
+  dragging, and a window that matches no desktop file can't be pinned. Top bar
+  shortcuts that would reach the workspace dots and clock are not shown.
 - Window menu: right-click a title bar, press Alt+Space
   (`activate-window-menu`) or right-click a taskbar entry. It offers Minimize,
   Maximize/Restore, Always on Top, Always on Visible Workspace, Move to
-  Workspace Left/Right and Close; the view does not follow a moved window.
+  Workspace Left/Right, the pin entries and Close; the view does not follow a moved window.
   Always on Top is grayed out while the window is maximized, because mutter
   does not keep a maximized window above others. Mouse or keyboard (Up/Down,
   Enter, Escape). There are no entries for moving or resizing, for other
@@ -293,6 +306,8 @@ All mutter options work (`--help`).
 | `src/background.rs` | Desktop background: settings, picture loading |
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
+| `src/pins.rs` | Pinned apps: storage and launching |
+| `src/shortcuts.rs` | Pinned apps on the top bar |
 | `src/window_menu.rs` | Window menu: always on top, workspace moves |
 | `src/taskbar.rs` | Taskbar with window previews |
 | `src/overview.rs` | Window overview tiles and their scrollbar |

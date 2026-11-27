@@ -1,9 +1,10 @@
 //! The window menu: what a right click on a title bar, Alt+Space or a right
-//! click on a taskbar entry opens.
+//! click on a taskbar entry opens. Pinned shortcuts use it too.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay, MtkRectangle};
+use crate::pins::{self, Pins, Place};
 use crate::ui::{self, gobj};
-use crate::windows;
+use crate::windows::{self, MenuTarget};
 use glib::prelude::*;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -26,6 +27,9 @@ pub enum Action {
     MoveLeft,
     MoveRight,
     Close,
+    /// Start a shortcut's app.
+    Open,
+    TogglePin(Place),
 }
 
 /// What the entries depend on.
@@ -41,6 +45,9 @@ pub struct Facts {
     can_close: bool,
     workspace: i32,
     workspaces: i32,
+    /// Whether the window's app is on the taskbar and the top bar. `None` if
+    /// the app cannot be told, which leaves nothing to pin.
+    pinned: Option<(bool, bool)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,8 +60,30 @@ pub struct Entry {
     new_group: bool,
 }
 
+fn entry(action: Action, label: &'static str, enabled: bool, checked: bool) -> Entry {
+    Entry { action, label, enabled, checked, new_group: false }
+}
+
+/// The two entries that pin an app or take it off again.
+fn pin_entries(taskbar: bool, top_bar: bool, enabled: bool) -> [Entry; 2] {
+    let taskbar_label = if taskbar { "Unpin from Taskbar" } else { "Pin to Taskbar" };
+    let top_bar_label = if top_bar { "Unpin from Top Bar" } else { "Pin to Top Bar" };
+    [
+        Entry { new_group: true, ..entry(Action::TogglePin(Place::Taskbar), taskbar_label, enabled, false) },
+        entry(Action::TogglePin(Place::TopBar), top_bar_label, enabled, false),
+    ]
+}
+
+/// The menu of a shortcut.
+pub fn shortcut_entries(running: bool, taskbar: bool, top_bar: bool) -> Vec<Entry> {
+    let open = if running { "Open New Window" } else { "Open" };
+    let mut out = vec![entry(Action::Open, open, true, false)];
+    out.extend(pin_entries(taskbar, top_bar, true));
+    out
+}
+
+/// The menu of a window.
 pub fn entries(facts: Facts) -> Vec<Entry> {
-    let entry = |action, label, enabled, checked| Entry { action, label, enabled, checked, new_group: false };
     let mut out = vec![
         entry(Action::Minimize, "Minimize", facts.can_minimize, false),
         entry(
@@ -78,6 +107,8 @@ pub fn entries(facts: Facts) -> Vec<Entry> {
             out.push(entry(Action::MoveRight, "Move to Workspace Right", true, false));
         }
     }
+    let (taskbar, top_bar) = facts.pinned.unwrap_or_default();
+    out.extend(pin_entries(taskbar, top_bar, facts.pinned.is_some()));
     out.push(Entry { new_group: true, ..entry(Action::Close, "Close", facts.can_close, false) });
     out
 }
@@ -124,6 +155,7 @@ fn facts(display: *mut MetaDisplay, window: &glib::Object) -> Facts {
             workspaces: ffi::meta_workspace_manager_get_n_workspaces(ffi::meta_display_get_workspace_manager(
                 display,
             )),
+            pinned: None,
         }
     }
 }
@@ -147,7 +179,8 @@ fn perform(display: *mut MetaDisplay, window: &glib::Object, action: Action) {
             Action::MoveRight if now.workspace >= 0 && now.workspace + 1 < now.workspaces => {
                 ffi::meta_window_change_workspace_by_index(w, now.workspace + 1, 0)
             }
-            Action::MoveLeft | Action::MoveRight => {}
+            // Not about the window's state; `choose` handles these.
+            Action::MoveLeft | Action::MoveRight | Action::Open | Action::TogglePin(_) => {}
             Action::Close => {
                 ffi::meta_window_delete(w, ffi::meta_display_get_current_time_roundtrip(display))
             }
@@ -160,6 +193,8 @@ struct State {
     grab: Option<*mut ffi::ClutterGrab>,
     /// The window the menu is for, and the watch for it going away.
     window: Option<(glib::Object, glib::SignalHandlerId)>,
+    /// The app that the pin and open entries act on.
+    app: Option<String>,
     entries: Vec<Entry>,
     rows: Vec<*mut ClutterActor>,
     selected: Option<usize>,
@@ -167,6 +202,7 @@ struct State {
 
 pub struct WindowMenu {
     display: *mut MetaDisplay,
+    pins: Rc<Pins>,
     stage: *mut ClutterActor,
     /// Covers the whole stage, to catch clicks outside the menu.
     overlay: *mut ClutterActor,
@@ -176,7 +212,7 @@ pub struct WindowMenu {
 
 impl WindowMenu {
     /// Build the (hidden) menu as the topmost child of `stage`.
-    pub fn new(display: *mut MetaDisplay, stage: *mut ClutterActor) -> Rc<Self> {
+    pub fn new(display: *mut MetaDisplay, stage: *mut ClutterActor, pins: Rc<Pins>) -> Rc<Self> {
         let this = unsafe {
             let overlay = ffi::clutter_actor_new();
             ffi::clutter_actor_set_reactive(overlay, 1);
@@ -186,7 +222,7 @@ impl WindowMenu {
             ffi::clutter_actor_set_reactive(menu, 1);
             ffi::clutter_actor_add_child(overlay, menu);
             ffi::clutter_actor_add_child(stage, overlay);
-            Rc::new(Self { display, stage, overlay, menu, state: RefCell::default() })
+            Rc::new(Self { display, pins, stage, overlay, menu, state: RefCell::default() })
         };
         let overlay = unsafe { gobj(this.overlay) };
         let weak = Rc::downgrade(&this);
@@ -203,10 +239,27 @@ impl WindowMenu {
         this
     }
 
-    /// Show the menu of `window` at `x`, `y` in stage coordinates.
-    pub fn open(self: &Rc<Self>, window: glib::Object, x: f32, y: f32) {
+    /// Show the menu of `target` at `x`, `y` in stage coordinates.
+    pub fn open(self: &Rc<Self>, target: MenuTarget, x: f32, y: f32) {
         self.close();
-        let entries = entries(facts(self.display, &window));
+        let pinned = |id: &str| {
+            (self.pins.contains(Place::Taskbar, id), self.pins.contains(Place::TopBar, id))
+        };
+        let (window, app, entries) = match target {
+            MenuTarget::Window(window) => {
+                let app = pins::app_id_of(&window);
+                let facts = Facts { pinned: app.as_deref().map(pinned), ..facts(self.display, &window) };
+                let entries = entries(facts);
+                (Some(window), app, entries)
+            }
+            MenuTarget::App(id) => {
+                let running = windows::list(self.display)
+                    .iter()
+                    .any(|w| pins::app_id_of(w).as_deref() == Some(id.as_str()));
+                let (taskbar, top_bar) = pinned(&id);
+                (None, Some(id), shortcut_entries(running, taskbar, top_bar))
+            }
+        };
         let height = 2.0 * PADDING
             + entries.len() as f32 * ROW_HEIGHT
             + entries.iter().filter(|e| e.new_group).count() as f32 * SEPARATOR_HEIGHT;
@@ -230,14 +283,18 @@ impl WindowMenu {
             top += ROW_HEIGHT;
         }
 
-        let weak = Rc::downgrade(self);
-        let watch = window.connect_local("unmanaged", false, move |_| {
-            with(&weak, |m| m.close());
-            None
+        let window = window.map(|window| {
+            let weak = Rc::downgrade(self);
+            let watch = window.connect_local("unmanaged", false, move |_| {
+                with(&weak, |m| m.close());
+                None
+            });
+            (window, watch)
         });
         {
             let mut state = self.state.borrow_mut();
-            state.window = Some((window, watch));
+            state.window = window;
+            state.app = app;
             state.entries = entries;
             state.rows = rows;
             state.selected = None;
@@ -264,6 +321,7 @@ impl WindowMenu {
             state.entries.clear();
             state.rows.clear();
             state.selected = None;
+            state.app = None;
             (state.grab.take(), state.window.take())
         };
         if let Some((window, watch)) = window {
@@ -347,12 +405,22 @@ impl WindowMenu {
         let chosen = {
             let state = self.state.borrow();
             let entry = state.entries.get(index).filter(|e| e.enabled);
-            entry.zip(state.window.as_ref()).map(|(e, (w, _))| (e.action, w.clone()))
+            let window = state.window.as_ref().map(|(w, _)| w.clone());
+            entry.map(|e| (e.action, window, state.app.clone()))
         };
-        let Some((action, window)) = chosen else { return };
+        let Some((action, window, app)) = chosen else { return };
         // First, so that the window can take the focus.
         self.close();
-        perform(self.display, &window, action);
+        match (action, window, app) {
+            (Action::TogglePin(place), _, Some(id)) => self.pins.toggle(place, &id),
+            (Action::Open, _, Some(id)) => {
+                if let Some(app) = pins::app(&id) {
+                    pins::launch(self.display, &app, true);
+                }
+            }
+            (action, Some(window), _) => perform(self.display, &window, action),
+            _ => {}
+        }
     }
 
     fn on_key(&self, keysym: u32) {
@@ -397,6 +465,7 @@ mod tests {
         can_close: true,
         workspace: 1,
         workspaces: 3,
+        pinned: Some((false, false)),
     };
 
     fn find(facts: Facts, action: Action) -> Option<Entry> {
@@ -422,6 +491,18 @@ mod tests {
         let above = find(maximized, Action::ToggleAbove).unwrap();
         assert!(!above.enabled && !above.checked);
         assert_eq!(find(maximized, Action::ToggleMaximize).unwrap().label, "Restore");
+    }
+
+    #[test]
+    fn pin_entries_follow_what_is_pinned() {
+        let pin = |facts, place| find(facts, Action::TogglePin(place)).unwrap();
+        assert_eq!(pin(NORMAL, Place::Taskbar).label, "Pin to Taskbar");
+        let pinned = Facts { pinned: Some((true, false)), ..NORMAL };
+        assert_eq!(pin(pinned, Place::Taskbar).label, "Unpin from Taskbar");
+        assert_eq!(pin(pinned, Place::TopBar).label, "Pin to Top Bar");
+        assert!(!pin(Facts { pinned: None, ..NORMAL }, Place::TopBar).enabled);
+        assert_eq!(shortcut_entries(false, true, false)[0].label, "Open");
+        assert_eq!(shortcut_entries(true, true, false)[0].label, "Open New Window");
     }
 
     #[test]

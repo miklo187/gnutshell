@@ -18,9 +18,23 @@ pub fn id(window: &glib::Object) -> u64 {
     unsafe { ffi::meta_window_get_id(ptr(window)) }
 }
 
+/// What a menu was asked for.
+pub enum MenuTarget {
+    Window(glib::Object),
+    /// A pinned app's shortcut, by desktop file id.
+    App(String),
+}
+
 /// The windows of all workspaces that belong in a window list, oldest first,
 /// so that entries keep their place when the focus changes.
 pub fn list(display: *mut MetaDisplay) -> Vec<glib::Object> {
+    let mut out = recent(display);
+    out.sort_by_key(|w| unsafe { ffi::meta_window_get_stable_sequence(ptr(w)) });
+    out
+}
+
+/// The same windows, the one used last first.
+pub fn recent(display: *mut MetaDisplay) -> Vec<glib::Object> {
     let mut out = Vec::new();
     unsafe {
         let list = ffi::meta_display_get_tab_list(display, ffi::META_TAB_LIST_NORMAL, std::ptr::null_mut());
@@ -31,7 +45,6 @@ pub fn list(display: *mut MetaDisplay) -> Vec<glib::Object> {
         }
         glib_sys::g_list_free(list);
     }
-    out.sort_by_key(|w| unsafe { ffi::meta_window_get_stable_sequence(ptr(w)) });
     out
 }
 

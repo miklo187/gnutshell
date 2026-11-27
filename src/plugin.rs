@@ -4,8 +4,11 @@ use crate::background::Background;
 use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
 use crate::overview::Overview;
+use crate::pins::Pins;
+use crate::shortcuts::TopShortcuts;
 use crate::taskbar::Taskbar;
 use crate::window_menu::WindowMenu;
+use crate::windows::MenuTarget;
 use crate::session::SessionMenu;
 use crate::switcher::Switcher;
 use crate::ui::gobj;
@@ -198,6 +201,8 @@ struct Shell {
     taskbar: Rc<Taskbar>,
     window_tracker: Rc<crate::windows::Tracker>,
     overview: Rc<Overview>,
+    pins: Rc<Pins>,
+    shortcuts: Rc<TopShortcuts>,
 }
 
 mod imp {
@@ -285,7 +290,7 @@ mod imp {
         fn show_window_menu(&self, window: *mut ffi::MetaWindow, x: i32, y: i32) {
             if !window.is_null() {
                 let window = unsafe { gobj(window) };
-                self.open_window_menu(window, x as f32, y as f32);
+                self.open_window_menu(MenuTarget::Window(window), x as f32, y as f32);
             }
         }
 
@@ -389,7 +394,16 @@ impl imp::GnutshellPlugin {
                 },
             );
             // Before the modal overlays, which have to cover the taskbar.
-            let taskbar = Taskbar::new(display, stage, &PANEL_COLOR);
+            let pins = Pins::load();
+            let shortcuts = TopShortcuts::new(
+                display,
+                stage,
+                panel,
+                pins.clone(),
+                crate::workspaces::PANEL_BUTTONS_WIDTH,
+                PANEL_HEIGHT as f32,
+            );
+            let taskbar = Taskbar::new(display, stage, pins.clone(), &PANEL_COLOR);
             let overview = Overview::new(display, stage);
             let window_tracker = crate::windows::Tracker::new(display);
             let weak_bar = Rc::downgrade(&taskbar);
@@ -402,21 +416,46 @@ impl imp::GnutshellPlugin {
                     overview.refresh();
                 }
             });
+            let weak = self.obj().downgrade();
+            window_tracker.listen(move || {
+                if let Some(plugin) = weak.upgrade() {
+                    plugin.imp().refresh_shortcuts();
+                }
+            });
+            let weak_tracker = Rc::downgrade(&window_tracker);
+            pins.set_listener(move || {
+                if let Some(tracker) = weak_tracker.upgrade() {
+                    tracker.queue();
+                }
+            });
 
-            *self.shell.borrow_mut() =
-                Some(Shell { display, panel, clock, background, taskbar, window_tracker, overview });
+            *self.shell.borrow_mut() = Some(Shell {
+                display,
+                panel,
+                clock,
+                background,
+                taskbar,
+                window_tracker,
+                overview,
+                pins: pins.clone(),
+                shortcuts: shortcuts.clone(),
+            });
             crate::icons::watch_theme_changes();
             *self.launcher.borrow_mut() = Some(Launcher::new(display, stage));
             *self.switcher.borrow_mut() = Some(Switcher::new(display, stage));
-            *self.window_menu.borrow_mut() = Some(WindowMenu::new(display, stage));
-            if let Some((_, taskbar)) = self.window_views() {
+            *self.window_menu.borrow_mut() = Some(WindowMenu::new(display, stage, pins));
+            let menu_handler = || {
                 let weak = self.obj().downgrade();
-                taskbar.set_menu_handler(move |window, x, y| {
+                move |target, x, y| {
                     if let Some(plugin) = weak.upgrade() {
-                        plugin.imp().open_window_menu(window, x, y);
+                        plugin.imp().open_window_menu(target, x, y);
                     }
-                });
+                }
+            };
+            if let Some((_, taskbar)) = self.window_views() {
+                taskbar.set_menu_handler(menu_handler());
             }
+            shortcuts.set_menu_handler(menu_handler());
             *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
             *self.session_menu.borrow_mut() =
                 Some(SessionMenu::new(display, stage, panel, PANEL_HEIGHT as f32));
@@ -775,7 +814,18 @@ impl imp::GnutshellPlugin {
         });
     }
 
-    fn open_window_menu(&self, window: glib::Object, x: f32, y: f32) {
+    /// Update the top bar shortcuts and move what is right of them.
+    fn refresh_shortcuts(&self) {
+        let shortcuts = self.shell.borrow().as_ref().map(|s| s.shortcuts.clone());
+        let Some(shortcuts) = shortcuts else { return };
+        shortcuts.refresh();
+        let workspaces = self.workspaces.borrow().clone();
+        if let Some(workspaces) = workspaces {
+            workspaces.set_left(crate::workspaces::PANEL_BUTTONS_WIDTH + shortcuts.width());
+        }
+    }
+
+    fn open_window_menu(&self, target: MenuTarget, x: f32, y: f32) {
         if crate::lockscreen::is_locked() {
             return;
         }
@@ -784,7 +834,7 @@ impl imp::GnutshellPlugin {
         }
         let menu = self.window_menu.borrow().clone();
         if let Some(menu) = menu {
-            menu.open(window, x, y);
+            menu.open(target, x, y);
         }
     }
 
@@ -909,6 +959,9 @@ impl imp::GnutshellPlugin {
             shell.taskbar.relayout(geo);
             shell.taskbar.set_visible(!fullscreen);
             shell.overview.refresh();
+            shell.shortcuts.set_panel_width(geo.width as f32);
+            // Later, as it asks for the shell again.
+            shell.window_tracker.queue();
 
             // Reserve the panel and taskbar areas so maximized windows don't
             // cover them.
@@ -987,6 +1040,8 @@ impl imp::GnutshellPlugin {
         shell.window_tracker.destroy();
         shell.overview.destroy();
         shell.taskbar.destroy();
+        shell.shortcuts.destroy();
+        drop(shell.pins);
         unsafe {
             ffi::clutter_actor_destroy(shell.panel); // also destroys the clock
         }
