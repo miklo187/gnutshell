@@ -1,7 +1,8 @@
-//! The volume menu under the volume icon: mute, a slider, the audio outputs
-//! and a link to Sound Settings.
+//! The volume menu under the volume icon: mute, a slider and the audio
+//! outputs, the same for the microphone if there is one, and a link to Sound
+//! Settings.
 
-use super::outputs::Output;
+use super::outputs::{Direction, Output};
 use super::{ICON_SIZE, Kind, StatusIcons, VOLUME_STEP, with};
 use crate::ffi::{self, ClutterActor};
 use crate::icons;
@@ -31,20 +32,39 @@ pub struct Menu {
 pub struct MenuState {
     grab: Option<*mut ffi::ClutterGrab>,
     pub open: bool,
-    parts: Option<Parts>,
-    /// The outputs shown, to rebuild only when they change.
-    outputs: Vec<Output>,
-    dragging: bool,
+    sliders: Vec<Slider>,
+    /// The devices shown, to rebuild only when they change.
+    shown: Shown,
+    /// The slider being dragged.
+    dragging: Option<Direction>,
 }
 
+/// What the menu lists.
+#[derive(Default, PartialEq)]
+struct Shown {
+    outputs: Vec<Output>,
+    /// `None` without a microphone, which leaves the input part out.
+    inputs: Option<Vec<Output>>,
+}
+
+/// A mute button, slider and percentage.
 #[derive(Clone, Copy)]
-struct Parts {
+struct Slider {
+    direction: Direction,
     mute_icon: *mut ClutterActor,
     fill: *mut ClutterActor,
     knob: *mut ClutterActor,
     percent: *mut ClutterActor,
     /// Left edge of the slider in stage coordinates.
-    slider_left: f32,
+    left: f32,
+}
+
+fn microphone_icon(muted: bool, level: f64) -> &'static str {
+    if muted || level <= 0.0 {
+        "microphone-sensitivity-muted-symbolic"
+    } else {
+        "microphone-sensitivity-high-symbolic"
+    }
 }
 
 impl Menu {
@@ -81,10 +101,10 @@ impl StatusIcons {
             with(&weak, |s| match key {
                 ui::KEY_ESCAPE => s.close_menu(),
                 ui::KEY_LEFT => {
-                    s.adjust_quietly(|a| a.change_volume(-VOLUME_STEP));
+                    s.adjust_quietly(|a| a.change_volume(Direction::Output, -VOLUME_STEP));
                 }
                 ui::KEY_RIGHT => {
-                    s.adjust_quietly(|a| a.change_volume(VOLUME_STEP));
+                    s.adjust_quietly(|a| a.change_volume(Direction::Output, VOLUME_STEP));
                 }
                 _ => {}
             });
@@ -100,15 +120,16 @@ impl StatusIcons {
         let weak = Rc::downgrade(self);
         overlay.connect_local("motion-event", false, move |args| {
             with(&weak, |s| {
-                if s.state.borrow().menu.dragging {
-                    s.slide_to(ui::event_coords(ui::event_arg(args)));
+                let dragging = s.state.borrow().menu.dragging;
+                if let Some(direction) = dragging {
+                    s.slide_to(direction, ui::event_coords(ui::event_arg(args)));
                 }
             });
             Some(false.to_value())
         });
         let weak = Rc::downgrade(self);
         overlay.connect_local("button-release-event", false, move |_| {
-            with(&weak, |s| s.state.borrow_mut().menu.dragging = false);
+            with(&weak, |s| s.state.borrow_mut().menu.dragging = None);
             Some(true.to_value())
         });
         let panel_box = unsafe { gobj(self.menu.panel_box) };
@@ -160,31 +181,83 @@ impl StatusIcons {
         if !self.state.borrow().menu.open {
             return;
         }
-        let outputs = self.outputs();
-        if outputs != self.state.borrow().menu.outputs {
+        if self.shown() != self.state.borrow().menu.shown {
             self.build_menu();
         } else {
-            self.update_slider();
+            self.update_sliders();
         }
     }
 
-    fn outputs(&self) -> Vec<Output> {
-        self.audio.borrow().as_ref().map(|a| a.outputs()).unwrap_or_default()
+    fn shown(&self) -> Shown {
+        let Some(audio) = self.audio.borrow().clone() else { return Shown::default() };
+        Shown {
+            outputs: audio.devices(Direction::Output),
+            inputs: audio.volume(Direction::Input).map(|_| audio.devices(Direction::Input)),
+        }
     }
 
     fn build_menu(self: &Rc<Self>) {
         let Some(geo) = ui::primary_monitor_geometry(self.display) else { return };
-        let scale = ui::primary_monitor_scale(self.display);
-        let outputs = self.outputs();
+        let shown = self.shown();
         let panel_box = self.menu.panel_box;
         let box_x = (geo.width as f32 - WIDTH - 4.0).max(0.0);
         let inner = WIDTH - 2.0 * PADDING;
-        let parts = unsafe {
+        let left = geo.x as f32 + box_x + SLIDER_X;
+        let mut sliders = Vec::new();
+        unsafe {
             ffi::clutter_actor_destroy_all_children(panel_box);
 
+            sliders.push(self.add_slider(Direction::Output, PADDING, left));
+            let mut y = PADDING + SLIDER_HEIGHT + PADDING;
+            y = self.add_devices("Output", Direction::Output, &shown.outputs, y);
+
+            if let Some(inputs) = &shown.inputs {
+                y = self.add_line(y);
+                sliders.push(self.add_slider(Direction::Input, y, left));
+                y += SLIDER_HEIGHT + PADDING;
+                y = self.add_devices("Input", Direction::Input, inputs, y);
+            }
+
+            y = self.add_line(y);
+            self.add_menu_row("Sound Settings", None, inner, y, |s| {
+                s.close_menu();
+                s.open_settings(Kind::Volume);
+            });
+            y += ui::ROW_HEIGHT + PADDING;
+
+            ffi::clutter_actor_set_position(self.menu.overlay, geo.x as f32, geo.y as f32);
+            ffi::clutter_actor_set_size(self.menu.overlay, geo.width as f32, geo.height as f32);
+            ffi::clutter_actor_set_size(panel_box, WIDTH, y);
+            ffi::clutter_actor_set_position(panel_box, box_x, self.panel_height + 4.0);
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            state.menu.sliders = sliders;
+            state.menu.shown = shown;
+        }
+        self.update_sliders();
+    }
+
+    /// A separator at `y`; returns where to go on.
+    unsafe fn add_line(&self, y: f32) -> f32 {
+        unsafe {
+            let line = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_size(line, WIDTH - 2.0 * PADDING, 1.0);
+            ffi::clutter_actor_set_position(line, PADDING, y + 4.0);
+            ffi::clutter_actor_set_background_color(line, &TRACK_COLOR);
+            ffi::clutter_actor_add_child(self.menu.panel_box, line);
+        }
+        y + 9.0
+    }
+
+    /// The mute button, slider and percentage of one direction, at `top`.
+    /// `left` is the slider's left edge on the stage.
+    unsafe fn add_slider(self: &Rc<Self>, direction: Direction, top: f32, left: f32) -> Slider {
+        let panel_box = self.menu.panel_box;
+        unsafe {
             let mute = ui::button("", MUTE_SIZE, MUTE_SIZE, &ui::BUTTON_COLOR);
             ffi::clutter_actor_add_child(panel_box, mute);
-            ffi::clutter_actor_set_position(mute, PADDING, PADDING);
+            ffi::clutter_actor_set_position(mute, PADDING, top);
             let mute_icon = ffi::clutter_actor_new();
             ffi::clutter_actor_set_size(mute_icon, ICON_SIZE, ICON_SIZE);
             ffi::clutter_actor_set_position(mute_icon, (MUTE_SIZE - ICON_SIZE) / 2.0, (MUTE_SIZE - ICON_SIZE) / 2.0);
@@ -192,7 +265,7 @@ impl StatusIcons {
             let weak = Rc::downgrade(self);
             gobj(mute).connect_local("button-press-event", false, move |_| {
                 with(&weak, |s| {
-                    s.adjust_quietly(|a| a.toggle_mute());
+                    s.adjust_quietly(|a| a.toggle_mute(direction));
                 });
                 Some(true.to_value())
             });
@@ -200,7 +273,7 @@ impl StatusIcons {
             // A tall invisible hit area around the thin track.
             let slider = ffi::clutter_actor_new();
             ffi::clutter_actor_set_size(slider, SLIDER_WIDTH, SLIDER_HEIGHT);
-            ffi::clutter_actor_set_position(slider, SLIDER_X, PADDING);
+            ffi::clutter_actor_set_position(slider, SLIDER_X, top);
             ffi::clutter_actor_set_reactive(slider, 1);
             ffi::clutter_actor_add_child(panel_box, slider);
             let part = |width: f32, height: f32, color: &ffi::CoglColor| {
@@ -217,59 +290,64 @@ impl StatusIcons {
             let weak = Rc::downgrade(self);
             gobj(slider).connect_local("button-press-event", false, move |args| {
                 with(&weak, |s| {
-                    s.state.borrow_mut().menu.dragging = true;
-                    s.slide_to(ui::event_coords(ui::event_arg(args)));
+                    s.state.borrow_mut().menu.dragging = Some(direction);
+                    s.slide_to(direction, ui::event_coords(ui::event_arg(args)));
                 });
                 Some(true.to_value())
             });
+            // Scrolling elsewhere in the menu changes the output.
+            if direction == Direction::Input {
+                let weak = Rc::downgrade(self);
+                let acc = std::cell::Cell::new(0.0);
+                gobj(slider).connect_local("scroll-event", false, move |args| {
+                    let mut rest = acc.get();
+                    let rows = ui::scroll_rows(ui::event_arg(args), &mut rest);
+                    acc.set(rest);
+                    if rows != 0 {
+                        with(&weak, |s| {
+                            s.adjust_quietly(|a| a.change_volume(direction, f64::from(-rows) * VOLUME_STEP));
+                        });
+                    }
+                    Some(true.to_value())
+                });
+            }
 
             let percent = ui::label(ui::BODY_FONT, "100%", &ui::TEXT_COLOR);
             ffi::clutter_actor_add_child(panel_box, percent);
-            let y = PADDING + (SLIDER_HEIGHT - ffi::clutter_actor_get_height(percent)) / 2.0;
+            let y = top + (SLIDER_HEIGHT - ffi::clutter_actor_get_height(percent)) / 2.0;
             ffi::clutter_actor_set_position(percent, SLIDER_X + SLIDER_WIDTH + 10.0, y.floor());
-            let mut y = PADDING + SLIDER_HEIGHT + PADDING;
+            Slider { direction, mute_icon, fill, knob, percent, left }
+        }
+    }
 
-            let heading = ui::label(ui::BODY_FONT, "Output", &ui::HINT_COLOR);
-            ffi::clutter_actor_add_child(panel_box, heading);
+    /// A heading and a row per device, from `y`; returns where to go on.
+    unsafe fn add_devices(
+        self: &Rc<Self>,
+        title: &str,
+        direction: Direction,
+        devices: &[Output],
+        mut y: f32,
+    ) -> f32 {
+        let scale = ui::primary_monitor_scale(self.display);
+        unsafe {
+            let heading = ui::label(ui::BODY_FONT, title, &ui::HINT_COLOR);
+            ffi::clutter_actor_add_child(self.menu.panel_box, heading);
             ffi::clutter_actor_set_position(heading, PADDING + 12.0, y);
             y += ffi::clutter_actor_get_height(heading) + 4.0;
 
             let check = icons::symbolic("object-select-symbolic", &ui::TEXT_COLOR, ui::ROW_ICON_SIZE, scale, self.stage);
-            for output in &outputs {
-                let icon = check.as_ref().filter(|_| output.active);
-                let target = output.target.clone();
-                self.add_menu_row(&output.label, icon, inner, y, move |s| {
+            for device in devices {
+                let icon = check.as_ref().filter(|_| device.active);
+                let target = device.target.clone();
+                self.add_menu_row(&device.label, icon, WIDTH - 2.0 * PADDING, y, move |s| {
                     if let Some(audio) = s.audio.borrow().as_ref() {
-                        audio.select(&target);
+                        audio.select(direction, &target);
                     }
                 });
                 y += ui::ROW_HEIGHT;
             }
-
-            let line = ffi::clutter_actor_new();
-            ffi::clutter_actor_set_size(line, inner, 1.0);
-            ffi::clutter_actor_set_position(line, PADDING, y + 4.0);
-            ffi::clutter_actor_set_background_color(line, &TRACK_COLOR);
-            ffi::clutter_actor_add_child(panel_box, line);
-            y += 9.0;
-            self.add_menu_row("Sound Settings", None, inner, y, |s| {
-                s.close_menu();
-                s.open_settings(Kind::Volume);
-            });
-            y += ui::ROW_HEIGHT + PADDING;
-
-            ffi::clutter_actor_set_position(self.menu.overlay, geo.x as f32, geo.y as f32);
-            ffi::clutter_actor_set_size(self.menu.overlay, geo.width as f32, geo.height as f32);
-            ffi::clutter_actor_set_size(panel_box, WIDTH, y);
-            ffi::clutter_actor_set_position(panel_box, box_x, self.panel_height + 4.0);
-            Parts { mute_icon, fill, knob, percent, slider_left: geo.x as f32 + box_x + SLIDER_X }
-        };
-        {
-            let mut state = self.state.borrow_mut();
-            state.menu.parts = Some(parts);
-            state.menu.outputs = outputs;
         }
-        self.update_slider();
+        y
     }
 
     unsafe fn add_menu_row(
@@ -301,33 +379,39 @@ impl StatusIcons {
         }
     }
 
-    pub(super) fn update_slider(&self) {
-        let Some(parts) = self.state.borrow().menu.parts else { return };
-        let Some(volume) = self.audio.borrow().as_ref().and_then(|a| a.volume()) else { return };
+    pub(super) fn update_sliders(&self) {
+        let sliders = self.state.borrow().menu.sliders.clone();
+        let Some(audio) = self.audio.borrow().clone() else { return };
         let scale = ui::primary_monitor_scale(self.display);
-        let shown = volume.level.clamp(0.0, 1.0) as f32;
-        unsafe {
-            let color = if volume.muted { &ui::HINT_COLOR } else { &ui::SELECTED_COLOR };
-            ffi::clutter_actor_set_background_color(parts.fill, color);
-            ffi::clutter_actor_set_width(parts.fill, (SLIDER_WIDTH * shown).round());
-            ffi::clutter_actor_set_position(
-                parts.knob,
-                ((SLIDER_WIDTH - KNOB_SIZE) * shown).round(),
-                (SLIDER_HEIGHT - KNOB_SIZE) / 2.0,
-            );
-            ui::set_text(parts.percent, &format!("{}%", (volume.level * 100.0).round()));
-            let name = super::volume_icon(volume);
-            let content = icons::symbolic(name, &ui::TEXT_COLOR, ICON_SIZE, scale, self.stage);
-            let content = content.as_ref().map_or(std::ptr::null_mut(), |c| c.as_ptr() as *mut ffi::ClutterContent);
-            ffi::clutter_actor_set_content(parts.mute_icon, content);
+        for slider in sliders {
+            let Some(volume) = audio.volume(slider.direction) else { continue };
+            let shown = volume.level.clamp(0.0, 1.0) as f32;
+            let name = match slider.direction {
+                Direction::Output => super::volume_icon(volume),
+                Direction::Input => microphone_icon(volume.muted, volume.level),
+            };
+            unsafe {
+                let color = if volume.muted { &ui::HINT_COLOR } else { &ui::SELECTED_COLOR };
+                ffi::clutter_actor_set_background_color(slider.fill, color);
+                ffi::clutter_actor_set_width(slider.fill, (SLIDER_WIDTH * shown).round());
+                ffi::clutter_actor_set_position(
+                    slider.knob,
+                    ((SLIDER_WIDTH - KNOB_SIZE) * shown).round(),
+                    (SLIDER_HEIGHT - KNOB_SIZE) / 2.0,
+                );
+                ui::set_text(slider.percent, &format!("{}%", (volume.level * 100.0).round()));
+                let content = icons::symbolic(name, &ui::TEXT_COLOR, ICON_SIZE, scale, self.stage);
+                let content = content.as_ref().map_or(std::ptr::null_mut(), |c| c.as_ptr() as *mut ffi::ClutterContent);
+                ffi::clutter_actor_set_content(slider.mute_icon, content);
+            }
         }
     }
 
-    fn slide_to(&self, at: Option<(f32, f32)>) {
-        let parts = self.state.borrow().menu.parts;
-        let (Some(parts), Some((x, _))) = (parts, at) else { return };
-        let level = slider_level(x, parts.slider_left, SLIDER_WIDTH);
-        self.adjust_quietly(|a| a.set_level(level));
+    fn slide_to(&self, direction: Direction, at: Option<(f32, f32)>) {
+        let slider = self.state.borrow().menu.sliders.iter().find(|s| s.direction == direction).copied();
+        let (Some(slider), Some((x, _))) = (slider, at) else { return };
+        let level = slider_level(x, slider.left, SLIDER_WIDTH);
+        self.adjust_quietly(|a| a.set_level(direction, level));
     }
 }
 

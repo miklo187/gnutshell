@@ -17,6 +17,7 @@ use crate::icons;
 use crate::osd::{Osd, OsdRequest};
 use crate::ui::{self, gobj};
 use audio::{Audio, Volume};
+use outputs::Direction;
 use gio::prelude::*;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -194,7 +195,7 @@ impl StatusIcons {
             with(&weak, |s| match (kind, pressed) {
                 (Kind::Volume, BUTTON_PRIMARY) => s.open_menu(),
                 (_, BUTTON_PRIMARY) => s.open_settings(kind),
-                (Kind::Volume, BUTTON_MIDDLE) => s.adjust(|audio| audio.toggle_mute()),
+                (Kind::Volume, BUTTON_MIDDLE) => s.adjust(|audio| audio.toggle_mute(Direction::Output)),
                 _ => {}
             });
             Some(true.to_value())
@@ -214,7 +215,8 @@ impl StatusIcons {
             return;
         }
         // Scrolling up is negative rows and louder.
-        let change = |audio: &Audio| audio.change_volume(f64::from(-rows) * VOLUME_STEP);
+        let change =
+            |audio: &Audio| audio.change_volume(Direction::Output, f64::from(-rows) * VOLUME_STEP);
         if popup {
             self.adjust(change);
         } else {
@@ -222,13 +224,14 @@ impl StatusIcons {
         }
     }
 
-    /// Change the volume and show it on the icon and an open menu.
+    /// Change a volume and show it on the icon and an open menu. Returns the
+    /// output's volume.
     fn adjust_quietly(&self, change: impl FnOnce(&Audio)) -> Option<Volume> {
         let audio = self.audio.borrow().clone()?;
         change(&audio);
-        let volume = audio.volume()?;
+        self.update_sliders();
+        let volume = audio.volume(Direction::Output)?;
         self.show_volume(Some(volume));
-        self.update_slider();
         Some(volume)
     }
 

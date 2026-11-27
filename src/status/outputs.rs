@@ -1,9 +1,27 @@
-//! Which audio outputs there are to choose from, and how to switch to one.
+//! Which audio devices there are to choose from, and how to switch to one.
+//! Outputs and inputs work alike; what follows says "output" for either, with
+//! sources in the place of sinks.
 //!
 //! An output is a port of a sound card, as in GNOME Settings: speakers,
 //! headphones, a monitor over HDMI. Many cards offer only some of their ports
 //! at a time, so using another one can mean changing the card's profile.
 //! Sinks without a card (virtual or network outputs) count as outputs too.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Output,
+    Input,
+}
+
+impl Direction {
+    /// How a card profile names its part for the other direction.
+    fn other_profile_part(self) -> &'static str {
+        match self {
+            Direction::Output => "input:",
+            Direction::Input => "output:",
+        }
+    }
+}
 
 /// A card number meaning "none" (`PA_INVALID_INDEX`).
 #[cfg(test)]
@@ -89,14 +107,15 @@ pub fn sink_with_port<'a>(sinks: &'a [Sink], card: u32, port: &str) -> Option<&'
 }
 
 /// The card profile to switch to for `port`: one that keeps the current
-/// input if there is such, then the card's favorite.
-pub fn profile_for<'a>(card: &Card, port: &'a Port) -> Option<&'a str> {
-    let input = |profile: &str| profile.split('+').find(|part| part.starts_with("input:")).map(str::to_owned);
-    let current = input(&card.active_profile);
+/// device of the other direction if there is such, then the card's favorite.
+pub fn profile_for<'a>(card: &Card, port: &'a Port, direction: Direction) -> Option<&'a str> {
+    let keep = direction.other_profile_part();
+    let other = |profile: &str| profile.split('+').find(|part| part.starts_with(keep)).map(str::to_owned);
+    let current = other(&card.active_profile);
     port.profiles
         .iter()
         .filter(|p| p.available)
-        .max_by_key(|p| (input(&p.name) == current, p.priority))
+        .max_by_key(|p| (other(&p.name) == current, p.priority))
         .map(|p| p.name.as_str())
 }
 
@@ -151,8 +170,20 @@ mod tests {
     #[test]
     fn switching_keeps_the_input() {
         let card = card();
-        assert_eq!(profile_for(&card, &card.ports[1]), Some("output:analog+input:analog"));
-        assert_eq!(profile_for(&card, &card.ports[2]), None);
+        let out = Direction::Output;
+        assert_eq!(profile_for(&card, &card.ports[1], out), Some("output:analog+input:analog"));
+        assert_eq!(profile_for(&card, &card.ports[2], out), None);
+    }
+
+    #[test]
+    fn switching_the_input_keeps_the_output() {
+        let card = card();
+        let mic = port(
+            "mic",
+            true,
+            vec![profile("input:analog", 90), profile("output:hdmi+input:analog", 5)],
+        );
+        assert_eq!(profile_for(&card, &mic, Direction::Input), Some("output:hdmi+input:analog"));
     }
 
     #[test]

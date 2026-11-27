@@ -1,7 +1,7 @@
-//! The default output's volume through libpulse (PipeWire provides the
-//! PulseAudio protocol), driven by the GLib main loop.
+//! The default output's and input's volume through libpulse (PipeWire
+//! provides the PulseAudio protocol), driven by the GLib main loop.
 
-use super::outputs::{self, Card, Output, Port, Profile, Sink, Target};
+use super::outputs::{self, Card, Direction, Output, Port, Profile, Sink, Target};
 use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::rc::{Rc, Weak};
@@ -11,16 +11,21 @@ use std::time::Duration;
 const VOLUME_NORM: u32 = 0x10000;
 const CHANNELS_MAX: usize = 32;
 const DEFAULT_SINK: &CStr = c"@DEFAULT_SINK@";
+const DEFAULT_SOURCE: &CStr = c"@DEFAULT_SOURCE@";
+/// `PA_INVALID_INDEX`.
+const INVALID_INDEX: u32 = u32::MAX;
 
 const CONTEXT_NOFAIL: c_int = 2;
 const CONTEXT_READY: c_int = 4;
 const CONTEXT_FAILED: c_int = 5;
 const CONTEXT_TERMINATED: c_int = 6;
 const SUBSCRIPTION_MASK_SINK: c_int = 0x1;
+const SUBSCRIPTION_MASK_SOURCE: c_int = 0x2;
 const SUBSCRIPTION_MASK_SERVER: c_int = 0x80;
 const SUBSCRIPTION_MASK_CARD: c_int = 0x200;
 const PORT_UNAVAILABLE: c_int = 1;
 const DIRECTION_OUTPUT: c_int = 1;
+const DIRECTION_INPUT: c_int = 2;
 /// How long a profile switch may take to bring up the wanted output.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
@@ -48,7 +53,8 @@ struct ChannelMap {
     map: [c_int; CHANNELS_MAX],
 }
 
-/// The start of `pa_sink_info`, as far as we read it.
+/// The start of `pa_sink_info`, as far as we read it. `pa_source_info` has the
+/// same layout, with `monitor_of_sink` where this has `monitor_source`.
 #[repr(C)]
 struct SinkInfo {
     name: *const c_char,
@@ -149,6 +155,14 @@ type SubscribeNotify = Option<unsafe extern "C" fn(*mut Context, c_int, u32, *mu
 type SinkInfoNotify = Option<unsafe extern "C" fn(*mut Context, *const SinkInfo, c_int, *mut c_void)>;
 type CardInfoNotify = Option<unsafe extern "C" fn(*mut Context, *const CardInfo, c_int, *mut c_void)>;
 type SuccessNotify = Option<unsafe extern "C" fn(*mut Context, c_int, *mut c_void)>;
+// The setters of sinks and sources have the same shapes.
+type SetVolume =
+    unsafe extern "C" fn(*mut Context, *const c_char, *const CVolume, SuccessNotify, *mut c_void) -> *mut Operation;
+type SetMute = unsafe extern "C" fn(*mut Context, *const c_char, c_int, SuccessNotify, *mut c_void) -> *mut Operation;
+type SetDefault =
+    unsafe extern "C" fn(*mut Context, *const c_char, SuccessNotify, *mut c_void) -> *mut Operation;
+type SetPort =
+    unsafe extern "C" fn(*mut Context, *const c_char, *const c_char, SuccessNotify, *mut c_void) -> *mut Operation;
 
 unsafe extern "C" {
     fn pa_glib_mainloop_new(context: *mut glib_sys::GMainContext) -> *mut c_void;
@@ -183,6 +197,40 @@ unsafe extern "C" {
         userdata: *mut c_void,
     ) -> *mut Operation;
     fn pa_context_get_sink_info_list(c: *mut Context, cb: SinkInfoNotify, userdata: *mut c_void) -> *mut Operation;
+    fn pa_context_get_source_info_by_name(
+        c: *mut Context,
+        name: *const c_char,
+        cb: SinkInfoNotify,
+        userdata: *mut c_void,
+    ) -> *mut Operation;
+    fn pa_context_get_source_info_list(c: *mut Context, cb: SinkInfoNotify, userdata: *mut c_void) -> *mut Operation;
+    fn pa_context_set_source_volume_by_name(
+        c: *mut Context,
+        name: *const c_char,
+        volume: *const CVolume,
+        cb: SuccessNotify,
+        userdata: *mut c_void,
+    ) -> *mut Operation;
+    fn pa_context_set_source_mute_by_name(
+        c: *mut Context,
+        name: *const c_char,
+        mute: c_int,
+        cb: SuccessNotify,
+        userdata: *mut c_void,
+    ) -> *mut Operation;
+    fn pa_context_set_default_source(
+        c: *mut Context,
+        name: *const c_char,
+        cb: SuccessNotify,
+        userdata: *mut c_void,
+    ) -> *mut Operation;
+    fn pa_context_set_source_port_by_name(
+        c: *mut Context,
+        source: *const c_char,
+        port: *const c_char,
+        cb: SuccessNotify,
+        userdata: *mut c_void,
+    ) -> *mut Operation;
     fn pa_context_get_card_info_list(c: *mut Context, cb: CardInfoNotify, userdata: *mut c_void) -> *mut Operation;
     fn pa_context_set_default_sink(
         c: *mut Context,
@@ -216,22 +264,40 @@ pub struct Volume {
     pub muted: bool,
 }
 
+/// What is known about the outputs, or about the inputs.
+#[derive(Default)]
+struct Side {
+    /// The default device's per-channel volumes, to keep the balance when
+    /// changing it, and whether it is muted.
+    current: RefCell<Option<(CVolume, bool)>>,
+    /// All devices (sinks or sources) and the cards with their ports of this
+    /// direction. The `incoming` lists collect a reply until it is complete.
+    devices: RefCell<Vec<Sink>>,
+    cards: RefCell<Vec<Card>>,
+    incoming_devices: RefCell<Vec<Sink>>,
+    incoming_cards: RefCell<Vec<Card>>,
+    default_device: RefCell<String>,
+}
+
+impl Side {
+    fn clear(&self) {
+        *self.current.borrow_mut() = None;
+        self.devices.borrow_mut().clear();
+        self.cards.borrow_mut().clear();
+        self.default_device.borrow_mut().clear();
+    }
+}
+
 pub struct Audio {
     mainloop: *mut c_void,
     context: Cell<*mut Context>,
-    /// The sink's per-channel volumes, to keep the balance when changing it.
-    sink: RefCell<Option<(CVolume, bool)>>,
-    /// Sinks and cards, and the default sink's name. The `incoming` lists
-    /// collect a reply until it is complete.
-    sinks: RefCell<Vec<Sink>>,
-    cards: RefCell<Vec<Card>>,
-    incoming_sinks: RefCell<Vec<Sink>>,
-    incoming_cards: RefCell<Vec<Card>>,
-    default_sink: RefCell<String>,
-    /// A (card, port) to switch to once the new profile brings up its sink.
-    pending: RefCell<Option<(u32, String, std::time::Instant)>>,
-    /// Called after any change; `None` while there is no sound server or no
-    /// output.
+    output: Side,
+    input: Side,
+    /// A (direction, card, port) to switch to once the new profile brings up
+    /// its device.
+    pending: RefCell<Option<(Direction, u32, String, std::time::Instant)>>,
+    /// Called after any change, with the output's volume; `None` while there
+    /// is no sound server or no output.
     changed: Box<dyn Fn(Option<Volume>)>,
     reconnect: RefCell<Option<glib::SourceId>>,
     this: Weak<Audio>,
@@ -243,12 +309,8 @@ impl Audio {
         let audio = Rc::new_cyclic(|this| Audio {
             mainloop,
             context: Cell::new(std::ptr::null_mut()),
-            sink: RefCell::default(),
-            sinks: RefCell::default(),
-            cards: RefCell::default(),
-            incoming_sinks: RefCell::default(),
-            incoming_cards: RefCell::default(),
-            default_sink: RefCell::default(),
+            output: Side::default(),
+            input: Side::default(),
             pending: RefCell::default(),
             changed,
             reconnect: RefCell::default(),
@@ -298,62 +360,79 @@ impl Audio {
         (!context.is_null() && unsafe { pa_context_get_state(context) } == CONTEXT_READY).then_some(context)
     }
 
+    fn side(&self, direction: Direction) -> &Side {
+        match direction {
+            Direction::Output => &self.output,
+            Direction::Input => &self.input,
+        }
+    }
+
     fn query(&self) {
         if let Some(context) = self.ready() {
+            for side in [&self.output, &self.input] {
+                side.incoming_devices.borrow_mut().clear();
+                side.incoming_cards.borrow_mut().clear();
+            }
             unsafe {
                 done(pa_context_get_sink_info_by_name(context, DEFAULT_SINK.as_ptr(), Some(on_sink), self.userdata()));
-                self.incoming_sinks.borrow_mut().clear();
-                self.incoming_cards.borrow_mut().clear();
+                done(pa_context_get_source_info_by_name(
+                    context,
+                    DEFAULT_SOURCE.as_ptr(),
+                    Some(on_source),
+                    self.userdata(),
+                ));
                 done(pa_context_get_card_info_list(context, Some(on_card_item), self.userdata()));
                 done(pa_context_get_sink_info_list(context, Some(on_sink_item), self.userdata()));
+                done(pa_context_get_source_info_list(context, Some(on_source_item), self.userdata()));
             }
         }
     }
 
-    /// The outputs to choose from.
-    pub fn outputs(&self) -> Vec<Output> {
-        outputs::list(&self.cards.borrow(), &self.sinks.borrow(), &self.default_sink.borrow())
+    /// The outputs or inputs to choose from.
+    pub fn devices(&self, direction: Direction) -> Vec<Output> {
+        let side = self.side(direction);
+        outputs::list(&side.cards.borrow(), &side.devices.borrow(), &side.default_device.borrow())
     }
 
-    /// Make `target` the default output.
-    pub fn select(&self, target: &Target) {
+    /// Make `target` the default output or input.
+    pub fn select(&self, direction: Direction, target: &Target) {
         self.pending.borrow_mut().take();
         match target {
-            Target::Sink(name) => self.use_sink(name, None),
+            Target::Sink(name) => self.use_device(direction, name, None),
             Target::Port { card, port } => {
-                let sink = outputs::sink_with_port(&self.sinks.borrow(), *card, port).map(|s| s.name.clone());
-                match sink {
-                    Some(sink) => self.use_sink(&sink, Some(port)),
-                    None => self.switch_profile(*card, port),
+                let devices = self.side(direction).devices.borrow();
+                let device = outputs::sink_with_port(&devices, *card, port).map(|s| s.name.clone());
+                drop(devices);
+                match device {
+                    Some(device) => self.use_device(direction, &device, Some(port)),
+                    None => self.switch_profile(direction, *card, port),
                 }
             }
         }
     }
 
-    fn use_sink(&self, sink: &str, port: Option<&str>) {
+    fn use_device(&self, direction: Direction, device: &str, port: Option<&str>) {
         let Some(context) = self.ready() else { return };
-        let Ok(sink) = CString::new(sink) else { return };
+        let Ok(device) = CString::new(device) else { return };
+        let (set_port, set_default): (SetPort, SetDefault) = match direction {
+            Direction::Output => (pa_context_set_sink_port_by_name, pa_context_set_default_sink),
+            Direction::Input => (pa_context_set_source_port_by_name, pa_context_set_default_source),
+        };
         unsafe {
             if let Some(port) = port.and_then(|p| CString::new(p).ok()) {
-                done(pa_context_set_sink_port_by_name(
-                    context,
-                    sink.as_ptr(),
-                    port.as_ptr(),
-                    None,
-                    std::ptr::null_mut(),
-                ));
+                done(set_port(context, device.as_ptr(), port.as_ptr(), None, std::ptr::null_mut()));
             }
-            done(pa_context_set_default_sink(context, sink.as_ptr(), None, std::ptr::null_mut()));
+            done(set_default(context, device.as_ptr(), None, std::ptr::null_mut()));
         }
     }
 
-    fn switch_profile(&self, card: u32, port: &str) {
+    fn switch_profile(&self, direction: Direction, card: u32, port: &str) {
         let Some(context) = self.ready() else { return };
         let profile = {
-            let cards = self.cards.borrow();
+            let cards = self.side(direction).cards.borrow();
             cards.iter().find(|c| c.index == card).and_then(|c| {
                 let port = c.ports.iter().find(|p| p.name == port)?;
-                outputs::profile_for(c, port).map(str::to_owned)
+                outputs::profile_for(c, port, direction).map(str::to_owned)
             })
         };
         let Some(profile) = profile.and_then(|p| CString::new(p).ok()) else {
@@ -361,88 +440,87 @@ impl Audio {
             return;
         };
         glib::g_debug!("gnutshell", "audio: switching card {card} to {profile:?} for {port}");
-        *self.pending.borrow_mut() = Some((card, port.to_owned(), std::time::Instant::now()));
+        *self.pending.borrow_mut() = Some((direction, card, port.to_owned(), std::time::Instant::now()));
         unsafe {
             done(pa_context_set_card_profile_by_index(context, card, profile.as_ptr(), None, std::ptr::null_mut()));
         }
     }
 
-    /// Finish a profile switch if its sink is there now.
+    /// Finish a profile switch if its device is there now.
     fn finish_switch(&self) {
-        let Some((card, port, since)) = self.pending.borrow().clone() else { return };
-        let sink = outputs::sink_with_port(&self.sinks.borrow(), card, &port).map(|s| s.name.clone());
+        let Some((direction, card, port, since)) = self.pending.borrow().clone() else { return };
+        let device = {
+            let devices = self.side(direction).devices.borrow();
+            outputs::sink_with_port(&devices, card, &port).map(|s| s.name.clone())
+        };
         if since.elapsed() > SWITCH_TIMEOUT {
             self.pending.borrow_mut().take();
-        } else if let Some(sink) = sink {
+        } else if let Some(device) = device {
             self.pending.borrow_mut().take();
-            self.use_sink(&sink, Some(&port));
+            self.use_device(direction, &device, Some(&port));
         }
     }
 
     /// Change the volume by `delta` (0.05 is five points).
-    pub fn change_volume(&self, delta: f64) {
-        let Some((volume, _)) = *self.sink.borrow() else { return };
-        self.apply(stepped(loudest(&volume), delta), delta > 0.0);
+    pub fn change_volume(&self, direction: Direction, delta: f64) {
+        let Some((volume, _)) = *self.side(direction).current.borrow() else { return };
+        self.apply(direction, stepped(loudest(&volume), delta), delta > 0.0);
     }
 
     /// Set the volume, 0.0 to 1.0.
-    pub fn set_level(&self, level: f64) {
-        let Some((volume, _)) = *self.sink.borrow() else { return };
+    pub fn set_level(&self, direction: Direction, level: f64) {
+        let Some((volume, _)) = *self.side(direction).current.borrow() else { return };
         let target = (level.clamp(0.0, 1.0) * f64::from(VOLUME_NORM)).round() as u32;
-        self.apply(target, target > loudest(&volume));
+        self.apply(direction, target, target > loudest(&volume));
     }
 
-    fn apply(&self, target: u32, louder: bool) {
-        let Some((volume, muted)) = *self.sink.borrow() else { return };
+    fn apply(&self, direction: Direction, target: u32, louder: bool) {
+        let Some((volume, muted)) = *self.side(direction).current.borrow() else { return };
         let Some(context) = self.ready() else { return };
         let scaled = scale(volume, target);
         // Keep the cache current, so quick scroll steps add up.
-        *self.sink.borrow_mut() = Some((scaled, muted));
-        unsafe {
-            done(pa_context_set_sink_volume_by_name(
-                context,
-                DEFAULT_SINK.as_ptr(),
-                &scaled,
-                None,
-                std::ptr::null_mut(),
-            ));
-        }
+        *self.side(direction).current.borrow_mut() = Some((scaled, muted));
+        let (name, set): (&CStr, SetVolume) = match direction {
+            Direction::Output => (DEFAULT_SINK, pa_context_set_sink_volume_by_name),
+            Direction::Input => (DEFAULT_SOURCE, pa_context_set_source_volume_by_name),
+        };
+        unsafe { done(set(context, name.as_ptr(), &scaled, None, std::ptr::null_mut())) };
         // Turning it up unmutes, as in gnome-shell.
         if muted && louder {
-            self.set_muted(false);
+            self.set_muted(direction, false);
         }
     }
 
-    pub fn toggle_mute(&self) {
-        let muted = self.sink.borrow().map(|(_, muted)| muted);
+    pub fn toggle_mute(&self, direction: Direction) {
+        let muted = self.side(direction).current.borrow().map(|(_, muted)| muted);
         if let Some(muted) = muted {
-            self.set_muted(!muted);
+            self.set_muted(direction, !muted);
         }
     }
 
-    fn set_muted(&self, muted: bool) {
+    fn set_muted(&self, direction: Direction, muted: bool) {
         let Some(context) = self.ready() else { return };
-        if let Some(sink) = self.sink.borrow_mut().as_mut() {
-            sink.1 = muted;
+        if let Some(current) = self.side(direction).current.borrow_mut().as_mut() {
+            current.1 = muted;
         }
-        unsafe {
-            done(pa_context_set_sink_mute_by_name(
-                context,
-                DEFAULT_SINK.as_ptr(),
-                c_int::from(muted),
-                None,
-                std::ptr::null_mut(),
-            ));
-        }
+        let (name, set): (&CStr, SetMute) = match direction {
+            Direction::Output => (DEFAULT_SINK, pa_context_set_sink_mute_by_name),
+            Direction::Input => (DEFAULT_SOURCE, pa_context_set_source_mute_by_name),
+        };
+        unsafe { done(set(context, name.as_ptr(), c_int::from(muted), None, std::ptr::null_mut())) };
     }
 
-    /// The current volume, including changes still on their way.
-    pub fn volume(&self) -> Option<Volume> {
-        self.sink.borrow().map(|(v, muted)| Volume { level: f64::from(loudest(&v)) / f64::from(VOLUME_NORM), muted })
+    /// The current volume, including changes still on their way. `None` for
+    /// an input if there is no microphone.
+    pub fn volume(&self, direction: Direction) -> Option<Volume> {
+        self.side(direction)
+            .current
+            .borrow()
+            .map(|(v, muted)| Volume { level: f64::from(loudest(&v)) / f64::from(VOLUME_NORM), muted })
     }
 
     fn publish(&self) {
-        (self.changed)(self.volume());
+        (self.changed)(self.volume(Direction::Output));
     }
 }
 
@@ -471,7 +549,10 @@ unsafe extern "C" fn on_state(context: *mut Context, userdata: *mut c_void) {
                 pa_context_set_subscribe_callback(context, Some(on_event), userdata);
                 done(pa_context_subscribe(
                     context,
-                    SUBSCRIPTION_MASK_SINK | SUBSCRIPTION_MASK_SERVER | SUBSCRIPTION_MASK_CARD,
+                    SUBSCRIPTION_MASK_SINK
+                        | SUBSCRIPTION_MASK_SOURCE
+                        | SUBSCRIPTION_MASK_SERVER
+                        | SUBSCRIPTION_MASK_CARD,
                     None,
                     std::ptr::null_mut(),
                 ));
@@ -479,10 +560,8 @@ unsafe extern "C" fn on_state(context: *mut Context, userdata: *mut c_void) {
             audio.query();
         }
         CONTEXT_FAILED | CONTEXT_TERMINATED => {
-            *audio.sink.borrow_mut() = None;
-            audio.sinks.borrow_mut().clear();
-            audio.cards.borrow_mut().clear();
-            audio.default_sink.borrow_mut().clear();
+            audio.output.clear();
+            audio.input.clear();
             audio.publish();
             // Not from inside the callback: the context is still in use.
             if audio.reconnect.borrow().is_none() {
@@ -504,16 +583,32 @@ unsafe extern "C" fn on_event(_context: *mut Context, _event: c_int, _index: u32
     unsafe { &*(userdata as *const Audio) }.query();
 }
 
+/// The default device of one direction, or none.
+fn set_default_info(side: &Side, info: Option<&SinkInfo>) {
+    *side.default_device.borrow_mut() = info.map(|i| unsafe { text(i.name) }).unwrap_or_default();
+    *side.current.borrow_mut() = info.map(|i| (i.volume, i.mute != 0));
+}
+
 unsafe extern "C" fn on_sink(_context: *mut Context, info: *const SinkInfo, eol: c_int, userdata: *mut c_void) {
     let audio = unsafe { &*(userdata as *const Audio) };
     if eol < 0 {
-        // No default output.
-        *audio.sink.borrow_mut() = None;
-        audio.default_sink.borrow_mut().clear();
+        set_default_info(&audio.output, None);
     } else if eol == 0 && !info.is_null() {
+        set_default_info(&audio.output, Some(unsafe { &*info }));
+    } else {
+        return;
+    }
+    audio.publish();
+}
+
+unsafe extern "C" fn on_source(_context: *mut Context, info: *const SinkInfo, eol: c_int, userdata: *mut c_void) {
+    let audio = unsafe { &*(userdata as *const Audio) };
+    if eol < 0 {
+        set_default_info(&audio.input, None);
+    } else if eol == 0 && !info.is_null() {
+        // Without a microphone the default can be an output's monitor.
         let info = unsafe { &*info };
-        *audio.default_sink.borrow_mut() = unsafe { text(info.name) };
-        *audio.sink.borrow_mut() = Some((info.volume, info.mute != 0));
+        set_default_info(&audio.input, Some(info).filter(|i| i.monitor_source == INVALID_INDEX));
     } else {
         return;
     }
@@ -530,19 +625,9 @@ unsafe fn items<'a, T: 'a>(array: *const *const T, n: u32) -> impl Iterator<Item
     (0..n).filter_map(move |i| unsafe { (*array.add(i)).as_ref() })
 }
 
-unsafe extern "C" fn on_sink_item(_context: *mut Context, info: *const SinkInfo, eol: c_int, userdata: *mut c_void) {
-    let audio = unsafe { &*(userdata as *const Audio) };
-    if eol != 0 {
-        if eol > 0 {
-            let sinks = std::mem::take(&mut *audio.incoming_sinks.borrow_mut());
-            *audio.sinks.borrow_mut() = sinks;
-            audio.finish_switch();
-            audio.publish();
-        }
-        return;
-    }
-    let Some(info) = (unsafe { info.as_ref() }) else { return };
-    let sink = unsafe {
+/// What the lists keep of a sink or source.
+unsafe fn device(info: &SinkInfo) -> Sink {
+    unsafe {
         Sink {
             name: text(info.name),
             description: text(info.description),
@@ -550,16 +635,49 @@ unsafe extern "C" fn on_sink_item(_context: *mut Context, info: *const SinkInfo,
             ports: items(info.ports, info.n_ports).map(|p| text(p.name)).collect(),
             active_port: info.active_port.as_ref().map(|p| text(p.name)).unwrap_or_default(),
         }
-    };
-    audio.incoming_sinks.borrow_mut().push(sink);
+    }
+}
+
+/// A device list is complete.
+fn devices_done(audio: &Audio, side: &Side) {
+    let devices = std::mem::take(&mut *side.incoming_devices.borrow_mut());
+    *side.devices.borrow_mut() = devices;
+    audio.finish_switch();
+    audio.publish();
+}
+
+unsafe extern "C" fn on_sink_item(_context: *mut Context, info: *const SinkInfo, eol: c_int, userdata: *mut c_void) {
+    let audio = unsafe { &*(userdata as *const Audio) };
+    if eol > 0 {
+        devices_done(audio, &audio.output);
+    } else if eol == 0
+        && let Some(info) = unsafe { info.as_ref() }
+    {
+        audio.output.incoming_devices.borrow_mut().push(unsafe { device(info) });
+    }
+}
+
+unsafe extern "C" fn on_source_item(_context: *mut Context, info: *const SinkInfo, eol: c_int, userdata: *mut c_void) {
+    let audio = unsafe { &*(userdata as *const Audio) };
+    if eol > 0 {
+        devices_done(audio, &audio.input);
+    } else if eol == 0
+        && let Some(info) = unsafe { info.as_ref() }
+        // Monitors of outputs are not inputs to choose.
+        && info.monitor_source == INVALID_INDEX
+    {
+        audio.input.incoming_devices.borrow_mut().push(unsafe { device(info) });
+    }
 }
 
 unsafe extern "C" fn on_card_item(_context: *mut Context, info: *const CardInfo, eol: c_int, userdata: *mut c_void) {
     let audio = unsafe { &*(userdata as *const Audio) };
     if eol != 0 {
         if eol > 0 {
-            let cards = std::mem::take(&mut *audio.incoming_cards.borrow_mut());
-            *audio.cards.borrow_mut() = cards;
+            for side in [&audio.output, &audio.input] {
+                let cards = std::mem::take(&mut *side.incoming_cards.borrow_mut());
+                *side.cards.borrow_mut() = cards;
+            }
         }
         return;
     }
@@ -567,27 +685,29 @@ unsafe extern "C" fn on_card_item(_context: *mut Context, info: *const CardInfo,
     let property = |list: *const c_void, key: &CStr| {
         if list.is_null() { String::new() } else { unsafe { text(pa_proplist_gets(list, key.as_ptr())) } }
     };
-    let ports = unsafe { items(info.ports, info.n_ports) }
-        .filter(|p| p.direction == DIRECTION_OUTPUT)
-        .map(|p| unsafe {
-            Port {
-                name: text(p.name),
-                description: text(p.description),
-                product: property(p.proplist, c"device.product.name"),
-                plugged: p.available != PORT_UNAVAILABLE,
-                profiles: items(p.profiles2, p.n_profiles)
-                    .map(|q| Profile { name: text(q.name), priority: q.priority, available: q.available != 0 })
-                    .collect(),
-            }
-        })
-        .collect();
-    let card = Card {
-        index: info.index,
-        description: property(info.proplist, c"device.description"),
-        active_profile: unsafe { info.active_profile2.as_ref().map(|p| text(p.name)).unwrap_or_default() },
-        ports,
-    };
-    audio.incoming_cards.borrow_mut().push(card);
+    for (side, direction) in [(&audio.output, DIRECTION_OUTPUT), (&audio.input, DIRECTION_INPUT)] {
+        let ports = unsafe { items(info.ports, info.n_ports) }
+            .filter(|p| p.direction == direction)
+            .map(|p| unsafe {
+                Port {
+                    name: text(p.name),
+                    description: text(p.description),
+                    product: property(p.proplist, c"device.product.name"),
+                    plugged: p.available != PORT_UNAVAILABLE,
+                    profiles: items(p.profiles2, p.n_profiles)
+                        .map(|q| Profile { name: text(q.name), priority: q.priority, available: q.available != 0 })
+                        .collect(),
+                }
+            })
+            .collect();
+        let card = Card {
+            index: info.index,
+            description: property(info.proplist, c"device.description"),
+            active_profile: unsafe { info.active_profile2.as_ref().map(|p| text(p.name)).unwrap_or_default() },
+            ports,
+        };
+        side.incoming_cards.borrow_mut().push(card);
+    }
 }
 
 fn loudest(v: &CVolume) -> u32 {

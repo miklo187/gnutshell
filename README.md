@@ -137,8 +137,11 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   Settings. Outputs are sound card ports such as speakers, headphones or an
   HDMI monitor, plus sinks without a card. Ports known to be unplugged are
   hidden. Choosing a port that the card's current profile lacks switches the
-  profile, keeping the current input if possible. Input devices and per-app
-  volumes are not in the menu. Escape or a click outside closes it.
+  profile, keeping the current input if possible. If there is a
+  microphone, the menu has the same for it below: a mute button, a slider
+  (click, drag or scroll) and the inputs, switched like outputs. Left/Right and
+  scrolling elsewhere in the menu change the output. The panel does not show
+  whether the microphone is in use. Per-app volumes are not in the menu. Escape or a click outside closes it.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super, or click the three-bar button at the left end of
   the panel, to open a search field over a dimmed screen. Type to
@@ -346,8 +349,8 @@ All mutter options work (`--help`).
 | `src/notifications/policy.rs` | Per-app notification settings, Do Not Disturb, sounds |
 | `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
 | `src/status.rs` | Panel network, volume and battery icons |
-| `src/status/audio.rs` | Volume and output switching through libpulse |
-| `src/status/outputs.rs` | Which audio outputs there are, and how to switch |
+| `src/status/audio.rs` | Volume and device switching through libpulse |
+| `src/status/outputs.rs` | Which audio devices there are, and how to switch |
 | `src/status/menu.rs` | Volume menu |
 | `src/osd.rs` | Volume/brightness popup |
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
