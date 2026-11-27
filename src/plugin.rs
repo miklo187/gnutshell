@@ -5,6 +5,7 @@ use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
 use crate::overview::{Kind, Overview};
 use crate::pins::Pins;
+use crate::quick::QuickSettings;
 use crate::shortcuts::TopShortcuts;
 use crate::taskbar::Taskbar;
 use crate::window_menu::WindowMenu;
@@ -214,6 +215,7 @@ mod imp {
         pub(super) launcher: RefCell<Option<Rc<Launcher>>>,
         pub(super) switcher: RefCell<Option<Rc<Switcher>>>,
         pub(super) window_menu: RefCell<Option<Rc<WindowMenu>>>,
+        pub(super) quick_settings: RefCell<Option<Rc<QuickSettings>>>,
         pub(super) polkit_agent: RefCell<Option<crate::polkit::Agent>>,
         pub(super) session_menu: RefCell<Option<std::rc::Rc<SessionMenu>>>,
         pub(super) input_sources: RefCell<Option<std::rc::Rc<crate::keyboard::InputSources>>>,
@@ -326,6 +328,10 @@ impl imp::GnutshellPlugin {
     fn on_lock_changed(&self, locked: bool) {
         if locked {
             // These hold stage grabs of their own; close them first.
+            let quick = self.quick_settings.borrow().clone();
+            if let Some(quick) = quick {
+                quick.close();
+            }
             self.close_window_menu();
             if let Some((overview, taskbar)) = self.window_views() {
                 overview.hide();
@@ -477,6 +483,8 @@ impl imp::GnutshellPlugin {
             *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
             *self.session_menu.borrow_mut() =
                 Some(SessionMenu::new(display, stage, panel, PANEL_HEIGHT as f32));
+            *self.quick_settings.borrow_mut() =
+                Some(QuickSettings::new(display, stage, panel, PANEL_HEIGHT as f32));
             *self.input_sources.borrow_mut() =
                 crate::keyboard::InputSources::new(display, panel, PANEL_HEIGHT as f32);
             let osd = crate::osd::Osd::new(display, stage);
@@ -955,6 +963,10 @@ impl imp::GnutshellPlugin {
     /// indicator ends where they start.
     fn place_status_in(&self, panel_width: f32) {
         let mut right_edge = panel_width - crate::session::BUTTON_SIZE - 8.0;
+        if let Some(quick) = self.quick_settings.borrow().as_ref() {
+            quick.place(right_edge);
+            right_edge -= crate::quick::BUTTON_WIDTH;
+        }
         let status = self.status_icons.borrow().clone();
         if let Some(status) = status {
             status.place(right_edge);
@@ -1084,6 +1096,9 @@ impl imp::GnutshellPlugin {
         }
         if let Some(sources) = self.input_sources.borrow_mut().take() {
             sources.destroy();
+        }
+        if let Some(quick) = self.quick_settings.borrow_mut().take() {
+            quick.destroy();
         }
         if let Some(menu) = self.window_menu.borrow_mut().take() {
             menu.destroy();

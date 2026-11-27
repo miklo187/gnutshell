@@ -140,7 +140,15 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   picture, where it was when you pressed `Print`; the other keys leave it out. The captured area flashes, unless
   animations are off. The API also does color picking: the pixel under a
   click, with a preview of the color and its hex code next to the pointer.
-- Status icons left of the power button: network, volume and, if UPower
+- Quick settings: the gear button left of the power button opens switches for
+  the dark style (`color-scheme`), night light and Do Not Disturb. They change
+  the GNOME settings, so GNOME Settings shows the same. Night light still
+  follows its schedule, which the menu names while it is on. With a Bluetooth
+  adapter (through BlueZ) there is also a Bluetooth switch and the paired
+  devices: click one to connect or disconnect it. Pairing needs "Bluetooth
+  Settings"; gnutshell has no pairing agent of its own. "All Settings" opens
+  GNOME Settings.
+- Status icons left of the quick settings button: network, volume and, if UPower
   reports a battery, battery with its percentage. Scroll over the volume icon
   to change the default output's volume in steps of 5 % (up to 100 %), and
   middle-click it to mute. A left click on the network or battery icon opens
@@ -364,6 +372,8 @@ All mutter options work (`--help`).
 | `src/notifications/calendar.rs` | Month view opened from the clock |
 | `src/notifications/policy.rs` | Per-app notification settings, Do Not Disturb, sounds |
 | `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
+| `src/quick.rs` | Quick settings button and menu |
+| `src/bluetooth.rs` | Adapter and paired devices from BlueZ |
 | `src/status.rs` | Panel network, volume and battery icons |
 | `src/status/audio.rs` | Volume and device switching through libpulse |
 | `src/status/outputs.rs` | Which audio devices there are, and how to switch |

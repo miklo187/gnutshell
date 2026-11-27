@@ -5,6 +5,7 @@
 //! loop. No GJS is involved.
 
 mod background;
+mod bluetooth;
 mod drag;
 mod ffi;
 mod icons;
@@ -18,6 +19,7 @@ mod pam;
 mod pins;
 mod plugin;
 mod polkit;
+mod quick;
 mod screenshot;
 mod session;
 mod shell_dbus;
