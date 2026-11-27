@@ -30,8 +30,12 @@ const BAR_STEP: f32 = 5.0;
 const SCROLLBAR_GAP: f32 = 10.0;
 const SCROLLBAR_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x50);
 
+/// Opens the menu of an app, by desktop file id, at a point on the stage.
+type MenuHandler = Rc<dyn Fn(String, f32, f32)>;
+
 pub struct Launcher {
     display: *mut MetaDisplay,
+    menu: RefCell<Option<MenuHandler>>,
     stage: *mut ClutterActor,
     overlay: *mut ClutterActor,
     panel: *mut ClutterActor,
@@ -95,6 +99,7 @@ impl Launcher {
             ffi::clutter_actor_add_child(stage, overlay);
 
             Rc::new(Self {
+                menu: RefCell::default(),
                 display,
                 stage,
                 overlay,
@@ -148,6 +153,30 @@ impl Launcher {
             with(&weak, |l| l.on_scroll(ui::event_arg(args)));
             Some(true.to_value())
         });
+    }
+
+    /// `handler` runs on a right click on an app.
+    pub fn set_menu_handler(&self, handler: impl Fn(String, f32, f32) + 'static) {
+        *self.menu.borrow_mut() = Some(Rc::new(handler));
+    }
+
+    /// Take the keyboard back after a menu over the launcher.
+    pub fn refocus(&self) {
+        if self.is_visible() {
+            unsafe { ffi::clutter_actor_grab_key_focus(self.entry) };
+        }
+    }
+
+    /// The right click menu for the app at `index` of the matches.
+    fn open_menu(&self, index: usize, at: Option<(f32, f32)>) {
+        let id = {
+            let state = self.state.borrow();
+            state.matches.get(index).and_then(|&i| state.apps[i].id())
+        };
+        let handler = self.menu.borrow().clone();
+        if let (Some(id), Some(handler), Some((x, y))) = (id, handler, at) {
+            handler(id.to_string(), x, y);
+        }
     }
 
     pub fn is_visible(&self) -> bool {
@@ -302,10 +331,15 @@ impl Launcher {
                 let this = self as *const Self;
                 // Rows are destroyed (with their handlers) on every re-render and
                 // on hide, so they never outlive `self`.
-                gobj(row).connect_local("button-press-event", false, move |_| {
+                gobj(row).connect_local("button-press-event", false, move |args| {
                     let launcher = &*this;
-                    launcher.state.borrow_mut().selected = index;
-                    launcher.launch_selected();
+                    let event = ui::event_arg(args);
+                    if ffi::clutter_event_get_button(event) == 3 {
+                        launcher.open_menu(index, ui::event_coords(event));
+                    } else {
+                        launcher.state.borrow_mut().selected = index;
+                        launcher.launch_selected();
+                    }
                     Some(true.to_value())
                 });
             }

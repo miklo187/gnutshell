@@ -29,7 +29,9 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   icons only; the bar does not scroll. Like the panel, it reserves screen space
   and hides when the primary monitor shows a fullscreen window.
 - Pinned apps, as shortcuts on the taskbar and on the top bar: choose "Pin to
-  Taskbar" or "Pin to Top Bar" in the window menu of a running app. On the
+  Top Bar" or "Pin to Taskbar" in the window menu of a running app, or
+  right-click an app in the app launcher. The launcher's menu also has Open (or
+  Open New Window); after pinning, the launcher stays open. On the
   taskbar, pinned apps come first, in the order pinned. Without a window, a
   pinned app is an icon that starts it (hover shows its name); while it has
   windows, their entries take that place. On the top bar, pinned apps are
@@ -40,8 +42,8 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   "new window" desktop action if it has one; an app without one decides what
   starting it again does. Right-click a shortcut for Open (Open New
   Window while it runs) and the unpin entries. The list is stored in
-  `~/.config/gnutshell/pinned.ini`; it is not GNOME's dash favorites. Apps
-  can't be pinned from the app launcher, shortcuts can't be reordered by
+  `~/.config/gnutshell/pinned.ini`; it is not GNOME's dash favorites.
+  Shortcuts can't be reordered by
   dragging, and a window that matches no desktop file can't be pinned. Top bar
   shortcuts that would reach the clock are not shown.
 - Window menu: right-click a title bar, press Alt+Space

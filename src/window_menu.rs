@@ -1,5 +1,6 @@
 //! The window menu: what a right click on a title bar, Alt+Space or a right
-//! click on a taskbar entry opens. Pinned shortcuts use it too.
+//! click on a taskbar entry opens. Pinned shortcuts and apps in the launcher
+//! use it too.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay, MtkRectangle};
 use crate::pins::{self, Pins, Place};
@@ -189,8 +190,12 @@ fn perform(display: *mut MetaDisplay, window: &glib::Object, action: Action) {
     }
 }
 
+/// Runs when the menu closes, with whether it is about to open an app.
+type After = Box<dyn FnOnce(bool)>;
+
 #[derive(Default)]
 struct State {
+    after: Option<After>,
     grab: Option<*mut ffi::ClutterGrab>,
     /// The window the menu is for, and the watch for it going away.
     window: Option<(glib::Object, glib::SignalHandlerId)>,
@@ -316,14 +321,31 @@ impl WindowMenu {
         }
     }
 
+    /// Like `open`, over another modal view that wants to know when the menu
+    /// is gone again.
+    pub fn open_over(
+        self: &Rc<Self>,
+        target: MenuTarget,
+        x: f32,
+        y: f32,
+        after: impl FnOnce(bool) + 'static,
+    ) {
+        self.open(target, x, y);
+        self.state.borrow_mut().after = Some(Box::new(after));
+    }
+
     pub fn close(&self) {
-        let (grab, window) = {
+        self.dismiss(false);
+    }
+
+    fn dismiss(&self, opens_app: bool) {
+        let (grab, window, after) = {
             let mut state = self.state.borrow_mut();
             state.entries.clear();
             state.rows.clear();
             state.selected = None;
             state.app = None;
-            (state.grab.take(), state.window.take())
+            (state.grab.take(), state.window.take(), state.after.take())
         };
         if let Some((window, watch)) = window {
             window.disconnect(watch);
@@ -334,6 +356,9 @@ impl WindowMenu {
             gobject_sys::g_object_unref(grab as *mut gobject_sys::GObject);
             ffi::clutter_actor_hide(self.overlay);
             ffi::clutter_actor_destroy_all_children(self.menu);
+        }
+        if let Some(after) = after {
+            after(opens_app);
         }
     }
 
@@ -411,7 +436,7 @@ impl WindowMenu {
         };
         let Some((action, window, app)) = chosen else { return };
         // First, so that the window can take the focus.
-        self.close();
+        self.dismiss(action == Action::Open);
         match (action, window, app) {
             (Action::TogglePin(place), _, Some(id)) => self.pins.toggle(place, &id),
             (Action::Open, _, Some(id)) => {

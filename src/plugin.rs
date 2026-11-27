@@ -465,6 +465,15 @@ impl imp::GnutshellPlugin {
                 taskbar.set_menu_handler(menu_handler());
             }
             shortcuts.set_menu_handler(menu_handler());
+            let launcher = self.launcher.borrow().clone();
+            if let Some(launcher) = launcher {
+                let weak = self.obj().downgrade();
+                launcher.set_menu_handler(move |id, x, y| {
+                    if let Some(plugin) = weak.upgrade() {
+                        plugin.imp().open_launcher_menu(id, x, y);
+                    }
+                });
+            }
             *self.polkit_agent.borrow_mut() = crate::polkit::Agent::register(display, stage);
             *self.session_menu.borrow_mut() =
                 Some(SessionMenu::new(display, stage, panel, PANEL_HEIGHT as f32));
@@ -853,6 +862,21 @@ impl imp::GnutshellPlugin {
         let menu = self.window_menu.borrow().clone();
         if let Some(menu) = menu {
             menu.open(target, x, y);
+        }
+    }
+
+    /// The menu of an app in the launcher. The launcher stays open, unless
+    /// the menu starts the app.
+    fn open_launcher_menu(&self, id: String, x: f32, y: f32) {
+        if crate::lockscreen::is_locked() {
+            return;
+        }
+        let menu = self.window_menu.borrow().clone();
+        let launcher = self.launcher.borrow().clone();
+        if let (Some(menu), Some(launcher)) = (menu, launcher) {
+            menu.open_over(MenuTarget::App(id), x, y, move |opens_app| {
+                if opens_app { launcher.hide() } else { launcher.refocus() }
+            });
         }
     }
 
