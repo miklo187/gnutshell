@@ -55,12 +55,21 @@ opaque!(
     MetaSelection,
     MetaSelectionSource,
     MetaSoundPlayer,
+    MetaCursorTracker,
 );
 
 /// MetaWindowActor is a ClutterActor subclass; we only ever pass it around.
 pub type MetaWindowActor = ClutterActor;
 
 // ---------------------------------------------------------------- plain structs
+
+/// `graphene_point_t`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GraphenePoint {
+    pub x: c_float,
+    pub y: c_float,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -113,6 +122,7 @@ pub const PANGO_ELLIPSIZE_END: c_int = 3;
 pub const CLUTTER_POINTER_DEVICE: c_int = 0;
 pub const CLUTTER_KEYBOARD_DEVICE: c_int = 1;
 pub const CLUTTER_SCROLL_SOURCE_WHEEL: c_int = 1;
+pub const CLUTTER_PAINT_FLAG_NO_CURSORS: c_int = 1 << 0;
 pub const CLUTTER_PAINT_FLAG_CLEAR: c_int = 1 << 2;
 /// COGL_PIXEL_FORMAT_BGRA_8888_PRE = 3 | A_BIT | PREMULT_BIT | BGR_BIT
 pub const COGL_PIXEL_FORMAT_BGRA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7) | (1 << 5);
@@ -655,6 +665,26 @@ unsafe extern "C" {
         description: *const c_char,
         cancellable: *mut gio::ffi::GCancellable,
     );
+
+    // the pointer's image and position
+    pub fn meta_backend_get_cursor_tracker(backend: *mut MetaBackend) -> *mut MetaCursorTracker;
+    pub fn meta_cursor_tracker_get_sprite(tracker: *mut MetaCursorTracker) -> *mut CoglTexture;
+    pub fn meta_cursor_tracker_get_scale(tracker: *mut MetaCursorTracker) -> c_float;
+    pub fn meta_cursor_tracker_get_hot(tracker: *mut MetaCursorTracker, x: *mut c_int, y: *mut c_int);
+    pub fn meta_cursor_tracker_get_pointer(
+        tracker: *mut MetaCursorTracker,
+        coords: *mut GraphenePoint,
+        mods: *mut c_uint, // ClutterModifierType
+    );
+    pub fn meta_cursor_tracker_get_pointer_visible(tracker: *mut MetaCursorTracker) -> gboolean;
+    pub fn cogl_texture_get_width(texture: *mut CoglTexture) -> c_uint;
+    pub fn cogl_texture_get_height(texture: *mut CoglTexture) -> c_uint;
+    pub fn cogl_texture_get_data(
+        texture: *mut CoglTexture,
+        format: c_int, // CoglPixelFormat
+        rowstride: c_uint,
+        data: *mut u8,
+    ) -> c_int;
 
     // libsystemd
     pub fn sd_notify(unset_environment: c_int, state: *const c_char) -> c_int;

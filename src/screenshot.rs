@@ -5,7 +5,12 @@
 //! `Print` selects an area (Enter takes the whole screen), `Shift+Print`
 //! takes the whole screen and `Alt+Print` the focused window. Those save a PNG
 //! in `Pictures/Screenshots`, copy it to the clipboard and say so in a
-//! notification. The pointer is never in the picture.
+//! notification. While selecting, `P` puts the pointer in the picture, where
+//! it was when the selection started; the other keys leave it out. The
+//! captured area flashes.
+//!
+//! The pointer usually has its own hardware plane, which painting the stage
+//! doesn't include, so its image is read and drawn into the picture.
 //!
 //! Anyone who can read the screen can read what is on it, so like gnome-shell
 //! the D-Bus methods only answer the owners of `ALLOWED_CALLERS`, and refuse
@@ -69,6 +74,9 @@ const INTERFACE_XML: &str = r#"
       <arg type="i" direction="out" name="width"/>
       <arg type="i" direction="out" name="height"/>
     </method>
+    <method name="PickColor">
+      <arg type="a{sv}" direction="out" name="result"/>
+    </method>
     <method name="FlashArea">
       <arg type="i" direction="in" name="x"/>
       <arg type="i" direction="in" name="y"/>
@@ -83,7 +91,24 @@ const INTERFACE_XML: &str = r#"
 const KEYBINDINGS_SCHEMA: &str = "org.gnome.shell.keybindings";
 const KEYBINDINGS: [&CStr; 3] = [c"show-screenshot-ui", c"screenshot", c"screenshot-window"];
 
+const FLASH_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0xff);
+const FLASH_OPACITY: u8 = 0xc0;
+const FLASH_MS: u32 = 350;
+const AREA_HINT: &str = "Drag to select an area  ·  Enter: whole screen  ·  Escape: cancel";
+const PICK_HINT: &str = "Click to pick a color  ·  Escape: cancel";
+/// The color preview: a framed square above its hex code.
+const SWATCH_WIDTH: f32 = 84.0;
+const SWATCH_HEIGHT: f32 = 62.0;
+const SWATCH_COLOR_SIZE: f32 = 32.0;
+const SWATCH_FRAME: f32 = 2.0;
+/// The swatch's distance from the pointer: it must not cover that pixel.
+const SWATCH_OFFSET: f32 = 20.0;
+
 const SELECTION_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0x35, 0x84, 0xe4, 0x60);
+/// Larger pointer images are not drawn.
+const MAX_CURSOR_SIDE: u32 = 1024;
+const KEY_P: u32 = 0x70;
+const KEY_SHIFT_P: u32 = 0x50;
 /// Smaller drags count as a stray click.
 const MIN_SELECTION: i32 = 4;
 
@@ -95,6 +120,8 @@ enum Purpose {
     SelectArea(gio::DBusMethodInvocation),
     /// `InteractiveScreenshot`: save and answer with the file's URI.
     Interactive(gio::DBusMethodInvocation),
+    /// `PickColor`: answer with the color of the clicked pixel.
+    PickColor(gio::DBusMethodInvocation),
 }
 
 struct Selection {
@@ -102,11 +129,18 @@ struct Selection {
     grab: *mut ffi::ClutterGrab,
     /// Where the drag started, in stage coordinates.
     start: Option<(f32, f32)>,
+    /// `P` was pressed: the picture gets the pointer.
+    pointer: bool,
+    /// The pointer as it was before the selection started. During a drag it
+    /// is at the area's corner, and it looks different.
+    cursor: Option<Cursor>,
 }
 
 #[derive(Default)]
 struct State {
     selection: Option<Selection>,
+    /// The running flash and the timer that removes it.
+    flash: Option<(*mut ClutterActor, glib::SourceId)>,
     connection: Option<gio::DBusConnection>,
     registration: Option<gio::RegistrationId>,
     owner: Option<gio::OwnerId>,
@@ -119,7 +153,22 @@ pub struct Screenshots {
     overlay: *mut ClutterActor,
     marker: *mut ClutterActor,
     hint: *mut ClutterActor,
+    /// Shows the color under the pointer while picking, in `swatch_color`
+    /// and as text in `swatch_code`.
+    swatch: *mut ClutterActor,
+    swatch_color: *mut ClutterActor,
+    swatch_code: *mut ClutterActor,
     state: RefCell<State>,
+}
+
+/// The pointer's image and where it is, in stage coordinates.
+struct Cursor {
+    /// Premultiplied BGRA, `width` x `height`.
+    image: Picture,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
 }
 
 /// Screen pixels: tightly packed premultiplied BGRA.
@@ -131,7 +180,7 @@ struct Picture {
 
 impl Screenshots {
     pub fn new(display: *mut MetaDisplay, stage: *mut ClutterActor, notifications: Rc<Notifications>) -> Rc<Self> {
-        let (overlay, marker, hint) = unsafe {
+        let (overlay, marker, hint, swatch, swatch_color, swatch_code) = unsafe {
             let overlay = ffi::clutter_actor_new();
             ffi::clutter_actor_set_background_color(overlay, &ui::DIM_COLOR);
             ffi::clutter_actor_set_reactive(overlay, 1);
@@ -139,17 +188,43 @@ impl Screenshots {
             let marker = ffi::clutter_actor_new();
             ffi::clutter_actor_set_background_color(marker, &SELECTION_COLOR);
             ffi::clutter_actor_add_child(overlay, marker);
-            let hint = ui::label(
-                ui::ROW_FONT,
-                "Drag to select an area  ·  Enter: whole screen  ·  Escape: cancel",
-                &ui::TEXT_COLOR,
-            );
+            let hint = ui::label(ui::ROW_FONT, AREA_HINT, &ui::TEXT_COLOR);
             ffi::clutter_actor_add_child(overlay, hint);
+            let swatch = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_size(swatch, SWATCH_WIDTH, SWATCH_HEIGHT);
+            ffi::clutter_actor_set_background_color(swatch, &ui::BOX_COLOR);
+            ffi::clutter_actor_hide(swatch);
+            ffi::clutter_actor_add_child(overlay, swatch);
+            // A light frame sets the color off from the same color behind it.
+            let frame = ffi::clutter_actor_new();
+            let framed = SWATCH_COLOR_SIZE + 2.0 * SWATCH_FRAME;
+            ffi::clutter_actor_set_size(frame, framed, framed);
+            ffi::clutter_actor_set_position(frame, ((SWATCH_WIDTH - framed) / 2.0).floor(), 4.0);
+            ffi::clutter_actor_set_background_color(frame, &ui::TEXT_COLOR);
+            ffi::clutter_actor_add_child(swatch, frame);
+            let swatch_color = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_size(swatch_color, SWATCH_COLOR_SIZE, SWATCH_COLOR_SIZE);
+            ffi::clutter_actor_set_position(swatch_color, SWATCH_FRAME, SWATCH_FRAME);
+            ffi::clutter_actor_add_child(frame, swatch_color);
+            let swatch_code = ui::label(ui::BODY_FONT, "#000000", &ui::TEXT_COLOR);
+            ffi::clutter_actor_add_child(swatch, swatch_code);
+            ffi::clutter_actor_set_position(swatch_code, 8.0, framed + 6.0);
             ffi::clutter_actor_add_child(stage, overlay);
-            (overlay, marker, hint)
+            (overlay, marker, hint, swatch, swatch_color, swatch_code)
         };
         let this =
-            Rc::new(Self { display, stage, notifications, overlay, marker, hint, state: RefCell::default() });
+            Rc::new(Self {
+            display,
+            stage,
+            notifications,
+            overlay,
+            marker,
+            hint,
+            swatch,
+            swatch_color,
+            swatch_code,
+            state: RefCell::default(),
+        });
         this.connect_overlay();
         this.install_keybindings();
         this.own_name();
@@ -158,10 +233,10 @@ impl Screenshots {
 
     /// Give up any selection, e.g. because the screen locked.
     pub fn cancel(&self) {
-        if let Some(purpose) = self.end_selection() {
+        if let Some((purpose, _)) = self.end_selection() {
             match purpose {
                 Purpose::Shortcut => {}
-                Purpose::SelectArea(i) | Purpose::Interactive(i) => {
+                Purpose::SelectArea(i) | Purpose::Interactive(i) | Purpose::PickColor(i) => {
                     i.return_dbus_error("org.freedesktop.DBus.Error.Failed", "Cancelled");
                 }
             }
@@ -170,6 +245,7 @@ impl Screenshots {
 
     pub fn destroy(&self) {
         self.cancel();
+        self.end_flash();
         for name in KEYBINDINGS {
             unsafe { ffi::meta_display_remove_keybinding(self.display, name.as_ptr()) };
         }
@@ -223,10 +299,10 @@ impl Screenshots {
         }
         match name {
             "show-screenshot-ui" => self.start_selection(Purpose::Shortcut),
-            "screenshot" => self.take_for_user(self.screen_rect()),
+            "screenshot" => self.take_for_user(self.screen_rect(), None),
             "screenshot-window" => {
                 if let Some(rect) = self.focus_window_rect() {
-                    self.take_for_user(rect);
+                    self.take_for_user(rect, None);
                 }
             }
             _ => {}
@@ -242,7 +318,8 @@ impl Screenshots {
             let key = ui::key_symbol(ui::event_arg(args));
             with(&weak, |s| match key {
                 ui::KEY_ESCAPE => s.cancel(),
-                ui::KEY_RETURN | ui::KEY_KP_ENTER => s.finish_selection(s.screen_rect()),
+                ui::KEY_RETURN | ui::KEY_KP_ENTER if !s.picking() => s.finish_selection(s.screen_rect()),
+                KEY_P | KEY_SHIFT_P => s.toggle_pointer(),
                 _ => {}
             });
             Some(true.to_value())
@@ -268,19 +345,33 @@ impl Screenshots {
         }
     }
 
-    fn start_selection(self: &Rc<Self>, purpose: Purpose) {
-        if self.state.borrow().selection.is_some() {
-            if let Purpose::SelectArea(i) | Purpose::Interactive(i) = purpose {
-                i.return_dbus_error("org.freedesktop.DBus.Error.Failed", "A selection is already in progress");
+    fn picking(&self) -> bool {
+        matches!(self.state.borrow().selection, Some(Selection { purpose: Purpose::PickColor(_), .. }))
+    }
+
+    fn toggle_pointer(&self) {
+        let pointer = {
+            let mut state = self.state.borrow_mut();
+            // Only screenshots can have the pointer in them.
+            match state.selection.as_mut() {
+                Some(s) if matches!(s.purpose, Purpose::Shortcut | Purpose::Interactive(_)) => {
+                    s.pointer = !s.pointer;
+                    s.pointer
+                }
+                _ => return,
             }
-            return;
-        }
+        };
+        self.set_hint(&area_hint(pointer));
+    }
+
+    /// Show `text`, centered near the top of the primary monitor.
+    fn set_hint(&self, text: &str) {
         let screen = self.screen_rect();
-        let grab = unsafe {
-            ffi::clutter_actor_set_position(self.overlay, screen.x as f32, screen.y as f32);
-            ffi::clutter_actor_set_size(self.overlay, screen.width as f32, screen.height as f32);
-            ffi::clutter_actor_hide(self.marker);
+        unsafe {
+            ui::set_text(self.hint, text);
             if let Some(geo) = ui::primary_monitor_geometry(self.display) {
+                // Let the actor take the new text's width.
+                ffi::clutter_actor_set_width(self.hint, -1.0);
                 let width = ffi::clutter_actor_get_width(self.hint);
                 ffi::clutter_actor_set_position(
                     self.hint,
@@ -288,16 +379,91 @@ impl Screenshots {
                     (geo.y - screen.y) as f32 + 64.0,
                 );
             }
+        }
+    }
+
+    fn start_selection(self: &Rc<Self>, purpose: Purpose) {
+        if self.state.borrow().selection.is_some() {
+            if let Purpose::SelectArea(i) | Purpose::Interactive(i) | Purpose::PickColor(i) = purpose {
+                i.return_dbus_error("org.freedesktop.DBus.Error.Failed", "A selection is already in progress");
+            }
+            return;
+        }
+        let screen = self.screen_rect();
+        // Before the grab changes the pointer's shape.
+        let cursor = self.read_cursor();
+        let picking = matches!(purpose, Purpose::PickColor(_));
+        match &purpose {
+            Purpose::PickColor(_) => self.set_hint(PICK_HINT),
+            Purpose::SelectArea(_) => self.set_hint(AREA_HINT),
+            Purpose::Shortcut | Purpose::Interactive(_) => self.set_hint(&area_hint(false)),
+        }
+        // A tint would change the colors being picked.
+        let dim = if picking { &ui::TRANSPARENT } else { &ui::DIM_COLOR };
+        self.end_flash();
+        let grab = unsafe {
+            ffi::clutter_actor_set_background_color(self.overlay, dim);
+            ffi::clutter_actor_hide(self.swatch);
+            ffi::clutter_actor_set_position(self.overlay, screen.x as f32, screen.y as f32);
+            ffi::clutter_actor_set_size(self.overlay, screen.width as f32, screen.height as f32);
+            ffi::clutter_actor_hide(self.marker);
+            // The hint needs its own backdrop where nothing is dimmed.
+            let backdrop = if picking { &ui::BOX_COLOR } else { &ui::TRANSPARENT };
+            ffi::clutter_actor_set_background_color(self.hint, backdrop);
             ffi::clutter_actor_show(self.overlay);
             ffi::clutter_actor_set_child_above_sibling(self.stage, self.overlay, std::ptr::null_mut());
             let grab = ffi::clutter_stage_grab(self.stage as *mut ffi::ClutterStage, self.overlay);
             ffi::clutter_actor_grab_key_focus(self.overlay);
             grab
         };
-        self.state.borrow_mut().selection = Some(Selection { purpose, grab, start: None });
+        self.state.borrow_mut().selection = Some(Selection { purpose, grab, start: None, pointer: false, cursor });
+    }
+
+    /// The pointer moved (or the button went up) while picking a color.
+    fn pick(self: &Rc<Self>, at: (f32, f32), released: bool) {
+        let pixel = MtkRectangle { x: at.0.floor() as i32, y: at.1.floor() as i32, width: 1, height: 1 };
+        if released {
+            let Some((Purpose::PickColor(invocation), _)) = self.end_selection() else { return };
+            match self.capture(pixel, None).ok().and_then(|p| color_of(&p)) {
+                Some(color) => {
+                    let result = glib::VariantDict::new(None);
+                    result.insert_value("color", &color.to_variant());
+                    let reply = glib::Variant::tuple_from_iter([result.end()]);
+                    invocation.return_value(Some(&reply));
+                }
+                None => invocation.return_dbus_error("org.freedesktop.DBus.Error.Failed", "Could not read the pixel"),
+            }
+            return;
+        }
+        let Some((r, g, b)) = self.capture(pixel, None).ok().and_then(|p| color_of(&p)) else { return };
+        let byte = |c: f64| (c * 255.0).round() as u8;
+        let screen = self.screen_rect();
+        // Below and right of the pointer, or the other side at an edge.
+        let place = |at: f32, size: f32, end: f32| {
+            if at + SWATCH_OFFSET + size > end { at - SWATCH_OFFSET - size } else { at + SWATCH_OFFSET }
+        };
+        unsafe {
+            let color = ffi::CoglColor::rgba(byte(r), byte(g), byte(b), 0xff);
+            ffi::clutter_actor_set_background_color(self.swatch_color, &color);
+            ui::set_text(self.swatch_code, &format!("#{:02x}{:02x}{:02x}", byte(r), byte(g), byte(b)));
+            ffi::clutter_actor_set_position(
+                self.swatch,
+                place(at.0, SWATCH_WIDTH, (screen.x + screen.width) as f32) - screen.x as f32,
+                place(at.1, SWATCH_HEIGHT, (screen.y + screen.height) as f32) - screen.y as f32,
+            );
+            ffi::clutter_actor_show(self.swatch);
+        }
     }
 
     fn drag(self: &Rc<Self>, at: Option<(f32, f32)>, released: bool) {
+        if self.picking() {
+            if let Some(at) = at {
+                // A release without a press is left over from elsewhere.
+                let pressed = self.state.borrow().selection.as_ref().is_some_and(|s| s.start.is_some());
+                self.pick(at, released && pressed);
+            }
+            return;
+        }
         let start = self.state.borrow().selection.as_ref().and_then(|s| s.start);
         let (Some(start), Some(at)) = (start, at) else { return };
         let rect = drag_rect(start, at);
@@ -322,26 +488,29 @@ impl Screenshots {
         }
     }
 
-    /// Take the overlay away. Returns what the selection was for.
-    fn end_selection(&self) -> Option<Purpose> {
+    /// Take the overlay away. Returns what the selection was for, and whether
+    /// the pointer that belongs in the picture.
+    fn end_selection(&self) -> Option<(Purpose, Option<Cursor>)> {
         let selection = self.state.borrow_mut().selection.take()?;
         unsafe {
             ffi::clutter_grab_dismiss(selection.grab);
             gobject_sys::g_object_unref(selection.grab as *mut gobject_sys::GObject);
             ffi::clutter_actor_hide(self.overlay);
         }
-        Some(selection.purpose)
+        Some((selection.purpose, selection.cursor.filter(|_| selection.pointer)))
     }
 
     fn finish_selection(self: &Rc<Self>, rect: MtkRectangle) {
         // The overlay is hidden first, so it isn't in the picture.
-        let Some(purpose) = self.end_selection() else { return };
+        let Some((purpose, pointer)) = self.end_selection() else { return };
         match purpose {
-            Purpose::Shortcut => self.take_for_user(rect),
+            Purpose::Shortcut => self.take_for_user(rect, pointer.as_ref()),
+            // Picking ends in `pick`.
+            Purpose::PickColor(i) => i.return_dbus_error("org.freedesktop.DBus.Error.Failed", "Cancelled"),
             Purpose::SelectArea(invocation) => {
                 invocation.return_value(Some(&(rect.x, rect.y, rect.width, rect.height).to_variant()));
             }
-            Purpose::Interactive(invocation) => match self.capture(rect) {
+            Purpose::Interactive(invocation) => match self.capture(rect, pointer.as_ref()) {
                 Ok(picture) => {
                     glib::spawn_future_local(async move {
                         match save(picture, None).await {
@@ -402,8 +571,46 @@ impl Screenshots {
         scale
     }
 
-    /// Paint the part of `rect` that is on screen.
-    fn capture(&self, rect: MtkRectangle) -> Result<Picture, String> {
+    /// The pointer now, unless it is hidden.
+    fn read_cursor(&self) -> Option<Cursor> {
+        unsafe {
+            let backend = ffi::meta_context_get_backend(ffi::meta_display_get_context(self.display));
+            let tracker = ffi::meta_backend_get_cursor_tracker(backend);
+            if ffi::meta_cursor_tracker_get_pointer_visible(tracker) == 0 {
+                return None;
+            }
+            let texture = ffi::meta_cursor_tracker_get_sprite(tracker);
+            if texture.is_null() {
+                return None;
+            }
+            let (width, height) = (ffi::cogl_texture_get_width(texture), ffi::cogl_texture_get_height(texture));
+            if !(1..=MAX_CURSOR_SIDE).contains(&width) || !(1..=MAX_CURSOR_SIDE).contains(&height) {
+                return None;
+            }
+            let mut data = vec![0u8; width as usize * height as usize * 4];
+            let format = ffi::COGL_PIXEL_FORMAT_BGRA_8888_PRE;
+            if ffi::cogl_texture_get_data(texture, format, width * 4, data.as_mut_ptr()) == 0 {
+                glib::g_warning!("gnutshell", "screenshot: could not read the pointer image");
+                return None;
+            }
+            let mut at = ffi::GraphenePoint::default();
+            ffi::meta_cursor_tracker_get_pointer(tracker, &mut at, std::ptr::null_mut());
+            let (mut hot_x, mut hot_y) = (0, 0);
+            ffi::meta_cursor_tracker_get_hot(tracker, &mut hot_x, &mut hot_y);
+            // Image pixels to stage units, as in gnome-shell.
+            let scale = ffi::meta_cursor_tracker_get_scale(tracker);
+            Some(Cursor {
+                image: Picture { width: width as i32, height: height as i32, data },
+                x: at.x - hot_x as f32 * scale,
+                y: at.y - hot_y as f32 * scale,
+                width: width as f32 * scale,
+                height: height as f32 * scale,
+            })
+        }
+    }
+
+    /// Paint the part of `rect` that is on screen, and `cursor` over it.
+    fn capture(&self, rect: MtkRectangle, cursor: Option<&Cursor>) -> Result<Picture, String> {
         let rect = intersect(rect, self.screen_rect()).ok_or("The area is not on the screen")?;
         let scale = self.scale_for(rect);
         let width = (rect.width as f32 * scale).round() as i32;
@@ -421,7 +628,8 @@ impl Screenshots {
                 stride,
                 ffi::COGL_PIXEL_FORMAT_BGRA_8888_PRE,
                 std::ptr::null_mut(),
-                ffi::CLUTTER_PAINT_FLAG_CLEAR,
+                // A software pointer would be painted; ours goes on after.
+                ffi::CLUTTER_PAINT_FLAG_CLEAR | ffi::CLUTTER_PAINT_FLAG_NO_CURSORS,
                 &mut err,
             );
             if ok == 0 {
@@ -430,12 +638,65 @@ impl Screenshots {
             }
         }
         data.truncate(stride as usize * height as usize);
-        Ok(Picture { width, height, data })
+        let mut picture = Picture { width, height, data };
+        if let Some(cursor) = cursor {
+            let x = (cursor.x - rect.x as f32) * scale;
+            let y = (cursor.y - rect.y as f32) * scale;
+            draw_over(&mut picture, &cursor.image, x, y, cursor.width * scale, cursor.height * scale)?;
+        }
+        Ok(picture)
+    }
+
+    /// Flash `rect` white, unless animations are off.
+    fn flash(self: &Rc<Self>, rect: MtkRectangle) {
+        self.end_flash();
+        let Some(rect) = intersect(rect, self.screen_rect()) else { return };
+        if !animations_enabled() {
+            return;
+        }
+        let actor = unsafe {
+            let actor = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_background_color(actor, &FLASH_COLOR);
+            ffi::clutter_actor_set_position(actor, rect.x as f32, rect.y as f32);
+            ffi::clutter_actor_set_size(actor, rect.width as f32, rect.height as f32);
+            ffi::clutter_actor_set_opacity(actor, FLASH_OPACITY);
+            ffi::clutter_actor_add_child(self.stage, actor);
+            ffi::clutter_actor_save_easing_state(actor);
+            ffi::clutter_actor_set_easing_mode(actor, ffi::CLUTTER_EASE_OUT_QUAD);
+            ffi::clutter_actor_set_easing_duration(actor, FLASH_MS);
+            ffi::clutter_actor_set_opacity(actor, 0);
+            ffi::clutter_actor_restore_easing_state(actor);
+            actor
+        };
+        let weak = Rc::downgrade(self);
+        let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(FLASH_MS.into()), move || {
+            with(&weak, |s| {
+                // The timer is the one running: don't remove it again.
+                let flash = s.state.borrow_mut().flash.take();
+                if let Some((actor, _)) = flash {
+                    unsafe { ffi::clutter_actor_destroy(actor) };
+                }
+            });
+        });
+        self.state.borrow_mut().flash = Some((actor, timer));
+    }
+
+    /// Remove a flash at once, e.g. so that it isn't in the next picture.
+    fn end_flash(&self) {
+        let flash = self.state.borrow_mut().flash.take();
+        if let Some((actor, timer)) = flash {
+            timer.remove();
+            unsafe { ffi::clutter_actor_destroy(actor) };
+        }
     }
 
     /// A screenshot the user asked for with a key.
-    fn take_for_user(self: &Rc<Self>, rect: MtkRectangle) {
-        let picture = self.capture(rect);
+    fn take_for_user(self: &Rc<Self>, rect: MtkRectangle, cursor: Option<&Cursor>) {
+        self.end_flash();
+        let picture = self.capture(rect, cursor);
+        if picture.is_ok() {
+            self.flash(rect);
+        }
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let saved = match picture {
@@ -516,31 +777,51 @@ impl Screenshots {
         }
         match method {
             "Screenshot" => {
-                let (_, _, name) = params.get::<(bool, bool, String)>().unwrap_or_default();
-                self.reply_with_file(self.capture(self.screen_rect()), name, invocation);
+                let (pointer, flash, name) = params.get::<(bool, bool, String)>().unwrap_or_default();
+                let picture = self.capture_for_caller(Some(self.screen_rect()), pointer, flash);
+                self.reply_with_file(picture, name, invocation);
             }
             "ScreenshotWindow" => {
-                let (_, _, _, name) = params.get::<(bool, bool, bool, String)>().unwrap_or_default();
-                let picture = self
-                    .focus_window_rect()
-                    .ok_or_else(|| "No window has focus".to_owned())
-                    .and_then(|rect| self.capture(rect));
+                let (_, pointer, flash, name) = params.get::<(bool, bool, bool, String)>().unwrap_or_default();
+                let picture = self.capture_for_caller(self.focus_window_rect(), pointer, flash);
                 self.reply_with_file(picture, name, invocation);
             }
             "ScreenshotArea" => {
-                let (x, y, width, height, _, name) =
+                let (x, y, width, height, flash, name) =
                     params.get::<(i32, i32, i32, i32, bool, String)>().unwrap_or_default();
-                self.reply_with_file(self.capture(MtkRectangle { x, y, width, height }), name, invocation);
+                let picture = self.capture_for_caller(Some(MtkRectangle { x, y, width, height }), false, flash);
+                self.reply_with_file(picture, name, invocation);
             }
             "SelectArea" => self.start_selection(Purpose::SelectArea(invocation)),
             "InteractiveScreenshot" => self.start_selection(Purpose::Interactive(invocation)),
-            // There is no flash effect.
-            "FlashArea" => invocation.return_value(None),
+            "PickColor" => self.start_selection(Purpose::PickColor(invocation)),
+            "FlashArea" => {
+                let (x, y, width, height) = params.get::<(i32, i32, i32, i32)>().unwrap_or_default();
+                self.flash(MtkRectangle { x, y, width, height });
+                invocation.return_value(None);
+            }
             _ => invocation.return_dbus_error(
                 "org.freedesktop.DBus.Error.UnknownMethod",
                 &format!("{method} is not implemented by gnutshell"),
             ),
         }
+    }
+
+    /// A picture for a D-Bus method; no `rect` means no focused window.
+    fn capture_for_caller(
+        self: &Rc<Self>,
+        rect: Option<MtkRectangle>,
+        pointer: bool,
+        flash: bool,
+    ) -> Result<Picture, String> {
+        let rect = rect.ok_or("No window has focus")?;
+        self.end_flash();
+        let cursor = if pointer { self.read_cursor() } else { None };
+        let picture = self.capture(rect, cursor.as_ref())?;
+        if flash {
+            self.flash(rect);
+        }
+        Ok(picture)
     }
 
     fn reply_with_file(
@@ -686,6 +967,57 @@ fn encode_png(mut picture: Picture) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Draw `image` (premultiplied BGRA) into `target` with its top left corner
+/// at (`x`, `y`), scaled to `width` x `height` pixels.
+fn draw_over(
+    target: &mut Picture,
+    image: &Picture,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> Result<(), String> {
+    let fits = |p: &Picture| p.width > 0 && p.height > 0 && p.data.len() >= (p.width * p.height * 4) as usize;
+    if !fits(target) || !fits(image) {
+        return Err("The picture is empty".into());
+    }
+    let mut pixels = image.data.clone();
+    unsafe {
+        let surface = |data: *mut u8, format, p: &Picture| {
+            ffi::cairo_image_surface_create_for_data(data, format, p.width, p.height, p.width * 4)
+        };
+        let destination = surface(target.data.as_mut_ptr(), ffi::CAIRO_FORMAT_RGB24, target);
+        let source = surface(pixels.as_mut_ptr(), ffi::CAIRO_FORMAT_ARGB32, image);
+        let cr = ffi::cairo_create(destination);
+        ffi::cairo_translate(cr, x.into(), y.into());
+        ffi::cairo_scale(cr, (width / image.width as f32).into(), (height / image.height as f32).into());
+        ffi::cairo_set_source_surface(cr, source, 0.0, 0.0);
+        ffi::cairo_paint(cr);
+        ffi::cairo_destroy(cr);
+        ffi::cairo_surface_flush(destination);
+        ffi::cairo_surface_destroy(source);
+        ffi::cairo_surface_destroy(destination);
+    }
+    Ok(())
+}
+
+fn area_hint(pointer: bool) -> String {
+    format!("{AREA_HINT}  ·  P: pointer {}", if pointer { "on" } else { "off" })
+}
+
+/// The first pixel's red, green and blue, from 0 to 1.
+fn color_of(picture: &Picture) -> Option<(f64, f64, f64)> {
+    let [b, g, r, _] = *picture.data.first_chunk::<4>()?;
+    let part = |c: u8| f64::from(c) / 255.0;
+    Some((part(r), part(g), part(b)))
+}
+
+fn animations_enabled() -> bool {
+    let schema = "org.gnome.desktop.interface";
+    gio::SettingsSchemaSource::default().and_then(|s| s.lookup(schema, true)).is_none()
+        || gio::Settings::new(schema).boolean("enable-animations")
+}
+
 /// The rectangle between two corners of a drag, in whole pixels.
 fn drag_rect(a: (f32, f32), b: (f32, f32)) -> MtkRectangle {
     let (x0, y0) = (a.0.min(b.0).floor() as i32, a.1.min(b.1).floor() as i32);
@@ -768,6 +1100,23 @@ mod tests {
         assert_eq!(named_path(folder, "/tmp/a"), Path::new("/tmp/a"));
         assert_eq!(named_path(folder, "shot"), folder.join("shot.png"));
         assert_eq!(named_path(folder, "shot.png"), folder.join("shot.png"));
+    }
+
+    #[test]
+    fn draws_the_pointer_over_the_picture() {
+        let mut target = Picture { width: 3, height: 1, data: [10, 10, 10, 255].repeat(3) };
+        // One opaque white pixel and one fully transparent one.
+        let image = Picture { width: 2, height: 1, data: vec![255, 255, 255, 255, 0, 0, 0, 0] };
+        draw_over(&mut target, &image, 1.0, 0.0, 2.0, 1.0).unwrap();
+        let blue: Vec<u8> = target.data.chunks(4).map(|p| p[0]).collect();
+        assert_eq!(blue, [10, 255, 10]);
+    }
+
+    #[test]
+    fn reads_colors_from_bgra() {
+        let picture = Picture { width: 1, height: 1, data: vec![255, 0, 51, 255] };
+        assert_eq!(color_of(&picture), Some((0.2, 0.0, 1.0)));
+        assert_eq!(color_of(&Picture { width: 0, height: 0, data: vec![] }), None);
     }
 
     #[test]

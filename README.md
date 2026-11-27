@@ -64,7 +64,10 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   notification. gnutshell also provides `org.gnome.Shell.Screenshot` for the
   GNOME portal and gnome-screenshot. As in gnome-shell, only the portal,
   gsd-media-keys and the owner of `org.gnome.Screenshot` may call it, and not
-  while the screen is locked. The pointer is never in the picture.
+  while the screen is locked. While selecting, `P` puts the pointer in the
+  picture, where it was when you pressed `Print`; the other keys leave it out. The captured area flashes, unless
+  animations are off. The API also does color picking: the pixel under a
+  click, with a preview of the color and its hex code next to the pointer.
 - Status icons left of the power button: network, volume and, if UPower
   reports a battery, battery with its percentage. Scroll over the volume icon
   to change the default output's volume in steps of 5 % (up to 100 %), and
@@ -293,9 +296,8 @@ All mutter options work (`--help`).
   `GNUTSHELL_FULL_TEARDOWN=1` to run it anyway, for debugging.
 - **Only part of `org.gnome.Shell` is implemented**: accelerators, `ShowOSD`
   and the `Mode`/`OverviewActive` properties. The screencast UI, `Eval` and the
-  extensions API are missing. In the screenshot API, `PickColor` is missing,
-  `FlashArea` and the `flash` and `include_cursor` arguments do nothing, and
-  `include_frame` is ignored.
+  extensions API are missing. In the screenshot API, `include_frame` is
+  ignored.
 - **`org.gtk.Notifications` is not provided.** GTK apps fall back to
   `org.freedesktop.Notifications`.
 - **Keyring prompts are not drawn by gnutshell.** gnome-shell shows its own.
