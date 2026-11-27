@@ -68,10 +68,17 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 - Status icons left of the power button: network, volume and, if UPower
   reports a battery, battery with its percentage. Scroll over the volume icon
   to change the default output's volume in steps of 5 % (up to 100 %), and
-  middle-click it to mute. A left click on an icon opens the matching page of
-  GNOME Settings. Volume comes from libpulse (PipeWire works), network from
-  NetworkManager, battery from UPower. An icon whose service is missing is
-  hidden. There are no quick settings menus.
+  middle-click it to mute. A left click on the network or battery icon opens
+  the matching page of GNOME Settings. Volume comes from libpulse (PipeWire
+  works), network from NetworkManager, battery from UPower. An icon whose
+  service is missing is hidden. There is no network or power menu.
+- Volume menu: a left click on the volume icon opens a mute button, a slider
+  (click, drag, scroll or Left/Right), the audio outputs and a link to Sound
+  Settings. Outputs are sound card ports such as speakers, headphones or an
+  HDMI monitor, plus sinks without a card. Ports known to be unplugged are
+  hidden. Choosing a port that the card's current profile lacks switches the
+  profile, keeping the current input if possible. Input devices and per-app
+  volumes are not in the menu. Escape or a click outside closes it.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super to open a search field over a dimmed screen. Type to
   filter installed apps. Scroll with the mouse wheel or touchpad; use Up/Down or Tab to select, and Enter or a click to
@@ -258,7 +265,9 @@ All mutter options work (`--help`).
 | `src/notifications/policy.rs` | Per-app notification settings, Do Not Disturb, sounds |
 | `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
 | `src/status.rs` | Panel network, volume and battery icons |
-| `src/status/audio.rs` | Default output volume through libpulse |
+| `src/status/audio.rs` | Volume and output switching through libpulse |
+| `src/status/outputs.rs` | Which audio outputs there are, and how to switch |
+| `src/status/menu.rs` | Volume menu |
 | `src/osd.rs` | Volume/brightness popup |
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
 | `src/lockscreen.rs` | Lock screen, `org.gnome.ScreenSaver`, logind lock/sleep, idle |

@@ -249,7 +249,7 @@ impl Screenshots {
         });
         let weak = Rc::downgrade(self);
         overlay.connect_local("button-press-event", false, move |args| {
-            let at = event_coords(ui::event_arg(args));
+            let at = ui::event_coords(ui::event_arg(args));
             with(&weak, |s| {
                 if let Some(selection) = s.state.borrow_mut().selection.as_mut() {
                     selection.start = at;
@@ -261,7 +261,7 @@ impl Screenshots {
             let weak = Rc::downgrade(self);
             let released = signal == "button-release-event";
             overlay.connect_local(signal, false, move |args| {
-                let at = event_coords(ui::event_arg(args));
+                let at = ui::event_coords(ui::event_arg(args));
                 with(&weak, |s| s.drag(at, released));
                 Some(true.to_value())
             });
@@ -706,15 +706,6 @@ fn intersect(a: MtkRectangle, b: MtkRectangle) -> Option<MtkRectangle> {
     let right = a.x.saturating_add(a.width).min(b.x.saturating_add(b.width));
     let bottom = a.y.saturating_add(a.height).min(b.y.saturating_add(b.height));
     (right > x && bottom > y).then(|| MtkRectangle { x, y, width: right - x, height: bottom - y })
-}
-
-fn event_coords(event: *const ffi::ClutterEvent) -> Option<(f32, f32)> {
-    if event.is_null() {
-        return None;
-    }
-    let (mut x, mut y) = (0.0, 0.0);
-    unsafe { ffi::clutter_event_get_coords(event, &mut x, &mut y) };
-    Some((x, y))
 }
 
 unsafe extern "C" fn on_binding(

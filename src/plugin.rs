@@ -284,6 +284,10 @@ impl imp::GnutshellPlugin {
             if let Some(s) = screenshots {
                 s.cancel();
             }
+            let status = self.status_icons.borrow().clone();
+            if let Some(s) = status {
+                s.close_menu();
+            }
         }
         if let Some(agent) = self.polkit_agent.borrow().as_ref() {
             agent.set_locked(locked);

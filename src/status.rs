@@ -1,13 +1,16 @@
 //! Panel status icons, left of the power button: volume, network and, on
 //! machines that have one, battery.
 //!
-//! On the volume icon, scrolling changes the volume and a middle click mutes.
-//! A left click on an icon opens the matching page of GNOME Settings. Volume
+//! On the volume icon, scrolling changes the volume, a middle click mutes and
+//! a left click opens the volume menu (`menu.rs`). A left click on another
+//! icon opens the matching page of GNOME Settings. Volume
 //! comes from libpulse (`audio.rs`), network from NetworkManager and battery
 //! from UPower's combined `DisplayDevice`. An icon whose service is missing
 //! is hidden.
 
 mod audio;
+mod menu;
+mod outputs;
 
 use crate::ffi::{self, ClutterActor, MetaDisplay};
 use crate::icons;
@@ -80,6 +83,7 @@ struct State {
     active_path: String,
     access_point_path: String,
     battery: Option<gio::DBusProxy>,
+    menu: menu::MenuState,
 }
 
 pub struct StatusIcons {
@@ -88,6 +92,7 @@ pub struct StatusIcons {
     panel_height: f32,
     slots: [Slot; 3],
     audio: RefCell<Option<Rc<Audio>>>,
+    menu: menu::Menu,
     osd: Rc<Osd>,
     /// Called when the icons take more or less room.
     resized: Box<dyn Fn()>,
@@ -123,6 +128,7 @@ impl StatusIcons {
             panel_height,
             slots,
             audio: RefCell::default(),
+            menu: menu::Menu::new(stage),
             osd,
             resized,
             state: RefCell::default(),
@@ -130,8 +136,14 @@ impl StatusIcons {
         for kind in KINDS {
             this.connect_slot(kind);
         }
+        this.connect_menu();
         let weak = Rc::downgrade(&this);
-        let audio = Audio::new(Box::new(move |volume| with(&weak, |s| s.show_volume(volume))));
+        let audio = Audio::new(Box::new(move |volume| {
+            with(&weak, |s| {
+                s.show_volume(volume);
+                s.refresh_menu();
+            });
+        }));
         *this.audio.borrow_mut() = Some(audio);
         this.watch(NM, NM_PATH, NM, |s, proxy| {
             s.state.borrow_mut().network = Some(proxy);
@@ -143,6 +155,8 @@ impl StatusIcons {
     }
 
     pub fn destroy(&self) {
+        self.close_menu();
+        self.menu.destroy();
         self.audio.borrow_mut().take();
         let state = std::mem::take(&mut *self.state.borrow_mut());
         drop(state);
@@ -178,6 +192,7 @@ impl StatusIcons {
             let event = ui::event_arg(args);
             let pressed = if event.is_null() { 0 } else { unsafe { ffi::clutter_event_get_button(event) } };
             with(&weak, |s| match (kind, pressed) {
+                (Kind::Volume, BUTTON_PRIMARY) => s.open_menu(),
                 (_, BUTTON_PRIMARY) => s.open_settings(kind),
                 (Kind::Volume, BUTTON_MIDDLE) => s.adjust(|audio| audio.toggle_mute()),
                 _ => {}
@@ -187,24 +202,39 @@ impl StatusIcons {
         if matches!(kind, Kind::Volume) {
             let weak = Rc::downgrade(self);
             button.connect_local("scroll-event", false, move |args| {
-                with(&weak, |s| {
-                    let rows = ui::scroll_rows(ui::event_arg(args), &mut s.state.borrow_mut().scroll);
-                    if rows != 0 {
-                        // Scrolling up is negative rows and louder.
-                        s.adjust(|audio| audio.change_volume(f64::from(-rows) * VOLUME_STEP));
-                    }
-                });
+                with(&weak, |s| s.scroll_volume(ui::event_arg(args), true));
                 Some(true.to_value())
             });
         }
     }
 
-    /// Change the volume and show the result.
-    fn adjust(&self, change: impl FnOnce(&Audio)) {
-        let Some(audio) = self.audio.borrow().clone() else { return };
+    fn scroll_volume(&self, event: *const ffi::ClutterEvent, popup: bool) {
+        let rows = ui::scroll_rows(event, &mut self.state.borrow_mut().scroll);
+        if rows == 0 {
+            return;
+        }
+        // Scrolling up is negative rows and louder.
+        let change = |audio: &Audio| audio.change_volume(f64::from(-rows) * VOLUME_STEP);
+        if popup {
+            self.adjust(change);
+        } else {
+            self.adjust_quietly(change);
+        }
+    }
+
+    /// Change the volume and show it on the icon and an open menu.
+    fn adjust_quietly(&self, change: impl FnOnce(&Audio)) -> Option<Volume> {
+        let audio = self.audio.borrow().clone()?;
         change(&audio);
-        let Some(volume) = audio.volume() else { return };
+        let volume = audio.volume()?;
         self.show_volume(Some(volume));
+        self.update_slider();
+        Some(volume)
+    }
+
+    /// The same with the volume popup, for when no menu shows the level.
+    fn adjust(&self, change: impl FnOnce(&Audio)) {
+        let Some(volume) = self.adjust_quietly(change) else { return };
         self.osd.show(&OsdRequest {
             icon: Some(gio::ThemedIcon::new(volume_icon(volume)).upcast()),
             label: None,

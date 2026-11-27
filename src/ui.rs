@@ -151,6 +151,16 @@ pub fn key_symbol(event: *const ffi::ClutterEvent) -> u32 {
     if event.is_null() { 0 } else { unsafe { ffi::clutter_event_get_key_symbol(event) } }
 }
 
+/// An event's position in stage coordinates.
+pub fn event_coords(event: *const ffi::ClutterEvent) -> Option<(f32, f32)> {
+    if event.is_null() {
+        return None;
+    }
+    let (mut x, mut y) = (0.0, 0.0);
+    unsafe { ffi::clutter_event_get_coords(event, &mut x, &mut y) };
+    Some((x, y))
+}
+
 /// Whole rows to scroll for a scroll event (positive = down). Smooth
 /// (touchpad / high-resolution wheel) deltas accumulate in `acc` until they
 /// add up to a row. Discrete events that Clutter emulates from smooth ones
