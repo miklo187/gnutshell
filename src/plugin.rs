@@ -1,5 +1,6 @@
 //! `MetaPlugin` subclassing support plus the gnutshell shell plugin itself.
 
+use crate::background::Background;
 use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
 use crate::session::SessionMenu;
@@ -122,7 +123,6 @@ unsafe extern "C" fn vfunc_kill_switch_workspace<T: MetaPluginImpl>(p: *mut ffi:
 
 const PANEL_HEIGHT: i32 = 32;
 const PANEL_COLOR: CoglColor = CoglColor::rgba(0x16, 0x16, 0x1a, 0xff);
-const BACKGROUND_COLOR: CoglColor = CoglColor::rgba(0x24, 0x2a, 0x38, 0xff);
 const TEXT_COLOR: CoglColor = CoglColor::rgba(0xf0, 0xf0, 0xf0, 0xff);
 const CLOCK_FONT: &std::ffi::CStr = c"Sans Bold 10";
 const CLOCK_FORMAT: &str = "%a %e %b  %H:%M";
@@ -160,7 +160,7 @@ struct Shell {
     display: *mut MetaDisplay,
     panel: *mut ClutterActor,
     clock: *mut ClutterActor,
-    background: *mut ClutterActor,
+    background: Rc<Background>,
 }
 
 mod imp {
@@ -307,13 +307,7 @@ impl imp::GnutshellPlugin {
             let stage = ffi::meta_compositor_get_stage(compositor) as *mut ClutterActor;
             let window_group = ffi::meta_compositor_get_window_group(compositor);
 
-            // Solid background below every window. It must live on the stage,
-            // not inside window_group: mutter restacks window_group by lowering
-            // window actors to the bottom and leaves unknown children in place,
-            // which would put a plain actor above all windows after a restack.
-            let background = ffi::clutter_actor_new();
-            ffi::clutter_actor_set_background_color(background, &BACKGROUND_COLOR);
-            ffi::clutter_actor_insert_child_below(stage, background, window_group);
+            let background = Background::new(display, stage, window_group);
 
             // Top panel with a centered clock, above all windows.
             let panel = ffi::clutter_actor_new();
@@ -654,6 +648,16 @@ impl imp::GnutshellPlugin {
             None
         };
         monitor_manager.connect_local("monitors-changed", false, relayout.clone());
+        let weak = self.obj().downgrade();
+        monitor_manager.connect_local("monitors-changed", false, move |_| {
+            if let Some(p) = weak.upgrade() {
+                let background = p.imp().shell.borrow().as_ref().map(|s| s.background.clone());
+                if let Some(background) = background {
+                    background.relayout();
+                }
+            }
+            None
+        });
         workspace_manager.connect_local("workspace-added", false, relayout.clone());
         display_obj.connect_local("in-fullscreen-changed", false, relayout);
 
@@ -725,22 +729,6 @@ impl imp::GnutshellPlugin {
         unsafe {
             let Some(geo) = crate::ui::primary_monitor_geometry(display) else { return };
             let primary = ffi::meta_display_get_primary_monitor(display);
-
-            // Background covers the bounding box of all monitors.
-            let n_monitors = ffi::meta_display_get_n_monitors(display);
-            let mut bounds: Option<MtkRectangle> = None;
-            for i in 0..n_monitors {
-                let mut r = MtkRectangle::default();
-                ffi::meta_display_get_monitor_geometry(display, i, &mut r);
-                bounds = Some(match bounds {
-                    None => r,
-                    Some(b) => union(b, r),
-                });
-            }
-            if let Some(b) = bounds {
-                ffi::clutter_actor_set_position(shell.background, b.x as f32, b.y as f32);
-                ffi::clutter_actor_set_size(shell.background, b.width as f32, b.height as f32);
-            }
 
             // Panel sits on top of the primary monitor.
             ffi::clutter_actor_set_position(shell.panel, geo.x as f32, geo.y as f32);
@@ -828,8 +816,8 @@ impl imp::GnutshellPlugin {
         let Some(shell) = self.shell.borrow_mut().take() else { return };
         unsafe {
             ffi::clutter_actor_destroy(shell.panel); // also destroys the clock
-            ffi::clutter_actor_destroy(shell.background);
         }
+        shell.background.destroy();
     }
 
     // ---------------------------------------------------------------- window effects
@@ -975,12 +963,4 @@ unsafe fn center_in_panel(child: *mut ClutterActor, panel: *mut ClutterActor) {
         let y = (PANEL_HEIGHT as f32 - ffi::clutter_actor_get_height(child)) / 2.0;
         ffi::clutter_actor_set_position(child, x.floor(), y.floor());
     }
-}
-
-fn union(a: MtkRectangle, b: MtkRectangle) -> MtkRectangle {
-    let x1 = a.x.min(b.x);
-    let y1 = a.y.min(b.y);
-    let x2 = (a.x + a.width).max(b.x + b.width);
-    let y2 = (a.y + a.height).max(b.y + b.height);
-    MtkRectangle { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
 }

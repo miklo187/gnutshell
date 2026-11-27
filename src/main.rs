@@ -4,6 +4,7 @@
 //! Rust `MetaPlugin` subclass as the compositor plugin, and runs mutter's main
 //! loop. No GJS is involved.
 
+mod background;
 mod ffi;
 mod icons;
 mod keyboard;

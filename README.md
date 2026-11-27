@@ -9,7 +9,15 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 
 ## Current features
 
-- Solid desktop background
+- Desktop background from `org.gnome.desktop.background`: the picture on every
+  monitor with your `picture-options` (zoom, scaled, centered, stretched,
+  wallpaper or spanned), or a solid color or gradient. With the dark style it
+  shows `picture-uri-dark`. Changes in Settings apply at once. Pictures are
+  decoded with glycin, as in gnome-shell (JPEG, PNG, JPEG XL, SVG and the
+  other formats your glycin loaders support); if one can't be read, the colors
+  show. Slideshows described by XML files and the crossfade between pictures
+  are not supported, and a file that changes under the same name is not
+  reloaded.
 - Top panel with a centered clock. The panel reserves screen space through workspace
   struts, so maximized windows stay below it. The panel hides when the primary monitor
   shows a fullscreen window.
@@ -146,7 +154,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 ## Build
 
 Requires mutter 51 development files (`libmutter-51.pc`), polkit
-(`polkit-agent-1.pc`), cairo, librsvg, libsystemd, libpulse with its GLib
+(`polkit-agent-1.pc`), cairo, librsvg, glycin (`glycin-2.pc`), libsystemd, libpulse with its GLib
 main loop (`libpulse-mainloop-glib.pc`) and Rust. Running it as a
 session needs gnome-session and gnome-settings-daemon.
 
@@ -259,6 +267,7 @@ All mutter options work (`--help`).
 |------|---------|
 | `src/main.rs` | `MetaContext` bootstrap, signal handling |
 | `src/plugin.rs` | `MetaPlugin` subclassing glue + the gnutshell shell |
+| `src/background.rs` | Desktop background: settings, picture loading |
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |

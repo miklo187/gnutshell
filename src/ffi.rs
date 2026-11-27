@@ -46,6 +46,12 @@ opaque!(
     PolkitAgentSession,
     CoglContext,
     CoglTexture,
+    MetaBackground,
+    MetaBackgroundContent,
+    GlyLoader,
+    GlyImage,
+    GlyFrame,
+    GlyFrameRequest,
     ClutterContent,
     RsvgHandle,
     cairo_t,
@@ -131,6 +137,21 @@ pub const CAIRO_FORMAT_ARGB32: c_int = 0;
 pub const CAIRO_STATUS_SUCCESS: c_int = 0;
 pub const CAIRO_FORMAT_RGB24: c_int = 1;
 pub const META_KEY_BINDING_IS_REVERSED: c_uint = 1 << 2;
+pub const G_DESKTOP_BACKGROUND_STYLE_NONE: c_int = 0;
+pub const G_DESKTOP_BACKGROUND_STYLE_WALLPAPER: c_int = 1;
+pub const G_DESKTOP_BACKGROUND_STYLE_CENTERED: c_int = 2;
+pub const G_DESKTOP_BACKGROUND_STYLE_SCALED: c_int = 3;
+pub const G_DESKTOP_BACKGROUND_STYLE_STRETCHED: c_int = 4;
+pub const G_DESKTOP_BACKGROUND_STYLE_ZOOM: c_int = 5;
+pub const G_DESKTOP_BACKGROUND_STYLE_SPANNED: c_int = 6;
+pub const G_DESKTOP_BACKGROUND_SHADING_SOLID: c_int = 0;
+pub const G_DESKTOP_BACKGROUND_SHADING_VERTICAL: c_int = 1;
+pub const G_DESKTOP_BACKGROUND_SHADING_HORIZONTAL: c_int = 2;
+/// COGL_PIXEL_FORMAT_RGBA_8888_PRE = 3 | A_BIT | PREMULT_BIT
+pub const COGL_PIXEL_FORMAT_RGBA_8888_PRE: c_int = 3 | (1 << 4) | (1 << 7);
+/// `GlyMemoryFormatSelection` and `GlyMemoryFormat`
+pub const GLY_MEMORY_SELECTION_R8G8B8A8_PREMULTIPLIED: c_uint = 1 << 2;
+pub const GLY_MEMORY_R8G8B8A8_PREMULTIPLIED: c_int = 2;
 pub const CLUTTER_SCROLL_UP: c_int = 0;
 pub const CLUTTER_SCROLL_DOWN: c_int = 1;
 pub const CLUTTER_SCROLL_SMOOTH: c_int = 4;
@@ -527,6 +548,49 @@ unsafe extern "C" {
         keyval: u32,
         key_state: c_int, // ClutterKeyState
     );
+
+    // desktop background
+    pub fn meta_background_group_new() -> *mut ClutterActor;
+    pub fn meta_background_actor_new(display: *mut MetaDisplay, monitor: c_int) -> *mut ClutterActor;
+    pub fn meta_background_new(display: *mut MetaDisplay) -> *mut MetaBackground;
+    pub fn meta_background_set_gradient(
+        background: *mut MetaBackground,
+        shading: c_int, // GDesktopBackgroundShading
+        color: *const CoglColor,
+        second_color: *const CoglColor,
+    );
+    pub fn meta_background_set_texture(
+        background: *mut MetaBackground,
+        texture: *mut CoglTexture,
+        style: c_int, // GDesktopBackgroundStyle
+        color_state: *mut ClutterColorState,
+    );
+    pub fn meta_background_content_set_background(
+        content: *mut MetaBackgroundContent,
+        background: *mut MetaBackground,
+    );
+    pub fn clutter_actor_get_content(actor: *mut ClutterActor) -> *mut ClutterContent;
+
+    // glycin: image loading
+    pub fn gly_loader_new(file: *mut gio::ffi::GFile) -> *mut gobject_sys::GObject;
+    pub fn gly_loader_set_accepted_memory_formats(loader: *mut GlyLoader, selection: c_uint);
+    pub fn gly_loader_load(loader: *mut GlyLoader, error: *mut *mut GError) -> *mut GlyImage;
+    pub fn gly_image_get_mime_type(image: *mut GlyImage) -> *const c_char;
+    pub fn gly_image_get_width(image: *mut GlyImage) -> u32;
+    pub fn gly_image_get_height(image: *mut GlyImage) -> u32;
+    pub fn gly_image_next_frame(image: *mut GlyImage, error: *mut *mut GError) -> *mut GlyFrame;
+    pub fn gly_image_get_specific_frame(
+        image: *mut GlyImage,
+        request: *mut GlyFrameRequest,
+        error: *mut *mut GError,
+    ) -> *mut GlyFrame;
+    pub fn gly_frame_request_new() -> *mut GlyFrameRequest;
+    pub fn gly_frame_request_set_scale(request: *mut GlyFrameRequest, width: u32, height: u32);
+    pub fn gly_frame_get_width(frame: *mut GlyFrame) -> u32;
+    pub fn gly_frame_get_height(frame: *mut GlyFrame) -> u32;
+    pub fn gly_frame_get_stride(frame: *mut GlyFrame) -> u32;
+    pub fn gly_frame_get_buf_bytes(frame: *mut GlyFrame) -> *mut glib_sys::GBytes;
+    pub fn gly_frame_get_memory_format(frame: *mut GlyFrame) -> c_int;
 
     // app icons: window app ids, scale, textures
     pub fn meta_window_get_sandboxed_app_id(window: *mut MetaWindow) -> *const c_char;
