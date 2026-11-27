@@ -9,9 +9,11 @@
 //! Nothing shows on the lock screen: notifications wait until unlock. While
 //! the primary monitor shows a fullscreen window, only critical ones show.
 //! With `org.gnome.desktop.notifications show-banners` off (Do Not Disturb),
-//! non-critical notifications are closed at once and only listed.
+//! non-critical notifications are closed at once and only listed. Per-app
+//! settings and sounds are in `policy.rs`.
 
 mod list;
+mod policy;
 
 use crate::ffi::{self, ClutterActor, ClutterText, MetaDisplay};
 use crate::icons;
@@ -134,6 +136,10 @@ pub struct Notification {
     /// Never kept in the notification list.
     pub transient: bool,
     pub expire_timeout: i32,
+    /// The `sound-name`, `sound-file` and `suppress-sound` hints.
+    pub sound_name: String,
+    pub sound_file: String,
+    pub suppress_sound: bool,
     /// Local time it arrived, as shown in the list.
     pub received: String,
 }
@@ -348,7 +354,7 @@ impl Notifications {
     ) {
         match method {
             "GetCapabilities" => {
-                let caps = vec!["actions", "body", "icon-static"];
+                let caps = vec!["actions", "body", "icon-static", "sound"];
                 invocation.return_value(Some(&(caps,).to_variant()));
             }
             "GetServerInformation" => {
@@ -434,14 +440,22 @@ impl Notifications {
         self.forget(n.id);
         glib::g_debug!("gnutshell", "notification {} from {:?}", n.id, n.app_name);
         let banners = self.settings.as_ref().is_none_or(|s| s.boolean("show-banners"));
-        if !banners && !n.critical {
+        let verdict = policy::decide(banners, policy::app_settings(&n), n.critical);
+        if verdict.sound {
+            policy::play_sound(self.display, &n);
+        }
+        if verdict.delivery != policy::Delivery::Banner {
             // It may replace one that is still around: drop that silently,
             // so the id is reported closed only once.
             if self.state.borrow().current.as_ref().is_some_and(|c| c.id == n.id) {
                 self.take_current();
             }
             self.state.borrow_mut().queue.remove(n.id);
-            self.retire(n);
+            if verdict.delivery == policy::Delivery::Drop {
+                self.emit_closed(&n, Reason::Expired);
+            } else {
+                self.retire(n);
+            }
             self.show_next();
             return;
         }
@@ -949,6 +963,9 @@ fn parse_notify(params: &glib::Variant) -> Option<(u32, Notification)> {
         critical: hint("urgency").and_then(|v| v.get::<u8>()) == Some(2),
         resident: hint("resident").and_then(|v| v.get::<bool>()) == Some(true),
         transient: hint("transient").and_then(|v| v.get::<bool>()) == Some(true),
+        sound_name: hint_string(&["sound-name"]),
+        sound_file: hint_string(&["sound-file"]),
+        suppress_sound: hint("suppress-sound").and_then(|v| v.get::<bool>()) == Some(true),
         expire_timeout: params.child_value(7).get::<i32>()?,
         ..Default::default()
     };

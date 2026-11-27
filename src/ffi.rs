@@ -54,6 +54,7 @@ opaque!(
     MetaKeymapDescription,
     MetaSelection,
     MetaSelectionSource,
+    MetaSoundPlayer,
 );
 
 /// MetaWindowActor is a ClutterActor subclass; we only ever pass it around.
@@ -638,6 +639,21 @@ unsafe extern "C" {
         selection: *mut MetaSelection,
         selection_type: c_int, // MetaSelectionType
         owner: *mut MetaSelectionSource,
+    );
+
+    // sounds
+    pub fn meta_display_get_sound_player(display: *mut MetaDisplay) -> *mut MetaSoundPlayer;
+    pub fn meta_sound_player_play_from_theme(
+        player: *mut MetaSoundPlayer,
+        name: *const c_char,
+        description: *const c_char,
+        cancellable: *mut gio::ffi::GCancellable,
+    );
+    pub fn meta_sound_player_play_from_file(
+        player: *mut MetaSoundPlayer,
+        file: *mut gio::ffi::GFile,
+        description: *const c_char,
+        cancellable: *mut gio::ffi::GCancellable,
     );
 
     // libsystemd

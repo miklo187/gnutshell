@@ -38,6 +38,16 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   fullscreen window only critical ones show. With Do Not Disturb
   (`org.gnome.desktop.notifications show-banners` off), other notifications are
   not shown as banners.
+- Notification settings and sounds: the per-app switches in GNOME Settings
+  work. An app that is off is neither shown nor listed, one with banners off
+  only goes to the list, and critical notifications still show a banner then.
+  gnutshell adds installed apps to that list when they first notify, matched
+  by the `desktop-entry` hint or else by name. A notification plays a sound
+  only if it asks with `sound-name` or `sound-file`, and not with
+  `suppress-sound`, system event sounds off, the app's sound alerts off, or
+  when it gets no banner because of Do Not Disturb or the app's settings.
+  The lock screen, pop-up expansion and lock screen detail settings have
+  nothing to act on.
 - Notification list: click the clock. It keeps notifications whose banner
   timed out, including ones hidden by Do Not Disturb, newest first. A blue dot
   next to the clock marks unread ones. Each entry has a copy button and ✕;
@@ -245,6 +255,7 @@ All mutter options work (`--help`).
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
 | `src/notifications/list.rs` | Notification list opened from the clock |
+| `src/notifications/policy.rs` | Per-app notification settings, Do Not Disturb, sounds |
 | `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
 | `src/status.rs` | Panel network, volume and battery icons |
 | `src/status/audio.rs` | Default output volume through libpulse |
@@ -276,9 +287,8 @@ All mutter options work (`--help`).
   extensions API are missing. In the screenshot API, `PickColor` is missing,
   `FlashArea` and the `flash` and `include_cursor` arguments do nothing, and
   `include_frame` is ignored.
-- **Notifications:** per-app notification settings,
-  sounds and `org.gtk.Notifications` are not supported (GTK apps fall back to
-  `org.freedesktop.Notifications`).
+- **`org.gtk.Notifications` is not provided.** GTK apps fall back to
+  `org.freedesktop.Notifications`.
 - **Keyring prompts are not drawn by gnutshell.** gnome-shell shows its own.
   Here D-Bus starts `/usr/lib/gcr-prompter` (Arch package `gcr`, not `gcr-4`),
   which opens an ordinary window: other windows can cover it, and it doesn't
