@@ -1,14 +1,17 @@
 //! Desktop notifications: the `org.freedesktop.Notifications` service and the
 //! banner that shows them below the panel.
 //!
-//! One banner shows at a time; the rest wait in a queue. There is no
-//! notification list yet, so a notification is closed when its banner goes
-//! away. Critical notifications stay until the user dismisses them.
+//! One banner shows at a time; the rest wait in a queue. A notification is
+//! closed when its banner goes away; if the user didn't act on it, it stays
+//! in the notification list (`list.rs`). Critical notifications stay until
+//! the user dismisses them.
 //!
 //! Nothing shows on the lock screen: notifications wait until unlock. While
 //! the primary monitor shows a fullscreen window, only critical ones show.
 //! With `org.gnome.desktop.notifications show-banners` off (Do Not Disturb),
-//! non-critical notifications are closed at once.
+//! non-critical notifications are closed at once and only listed.
+
+mod list;
 
 use crate::ffi::{self, ClutterActor, ClutterText, MetaDisplay};
 use crate::icons;
@@ -128,7 +131,11 @@ pub struct Notification {
     pub critical: bool,
     /// Stays after an action is invoked.
     pub resident: bool,
+    /// Never kept in the notification list.
+    pub transient: bool,
     pub expire_timeout: i32,
+    /// Local time it arrived, as shown in the list.
+    pub received: String,
 }
 
 impl Notification {
@@ -194,6 +201,7 @@ pub struct Notifications {
     stage: *mut ClutterActor,
     panel_height: f32,
     root: *mut ClutterActor,
+    view: list::ListView,
     settings: Option<gio::Settings>,
     state: RefCell<State>,
 }
@@ -201,6 +209,7 @@ pub struct Notifications {
 #[derive(Default)]
 struct State {
     queue: Queue,
+    list: list::ListState,
     current: Option<Notification>,
     timer: Option<glib::SourceId>,
     hovered: bool,
@@ -212,7 +221,13 @@ struct State {
 }
 
 impl Notifications {
-    pub fn new(display: *mut MetaDisplay, stage: *mut ClutterActor, panel_height: f32) -> Rc<Self> {
+    pub fn new(
+        display: *mut MetaDisplay,
+        stage: *mut ClutterActor,
+        panel: *mut ClutterActor,
+        clock: *mut ClutterActor,
+        panel_height: f32,
+    ) -> Rc<Self> {
         let root = unsafe {
             let root = ffi::clutter_actor_new();
             ffi::clutter_actor_set_background_color(root, &ui::BOX_COLOR);
@@ -224,13 +239,18 @@ impl Notifications {
         let settings = gio::SettingsSchemaSource::default()
             .and_then(|s| s.lookup("org.gnome.desktop.notifications", true))
             .map(|_| gio::Settings::new("org.gnome.desktop.notifications"));
-        let this = Rc::new(Self { display, stage, panel_height, root, settings, state: RefCell::default() });
+        let view = list::ListView::new(stage, panel, clock);
+        let this = Rc::new(Self { display, stage, panel_height, root, view, settings, state: RefCell::default() });
         this.connect_banner();
+        this.connect_list();
         this.own_name();
         this
     }
 
     pub fn set_locked(self: &Rc<Self>, locked: bool) {
+        if locked {
+            self.close_list();
+        }
         self.state.borrow_mut().locked = locked;
         self.sync();
     }
@@ -252,6 +272,11 @@ impl Notifications {
         } else if current.is_some() {
             self.place();
         }
+        // The monitor may have changed under an open list.
+        if self.state.borrow().list.open {
+            self.build_list();
+        }
+        self.place_clock();
         self.show_next();
     }
 
@@ -270,6 +295,7 @@ impl Notifications {
         if let Some(owner) = owner {
             gio::bus_unown_name(owner);
         }
+        self.destroy_list();
         unsafe { ffi::clutter_actor_destroy(self.root) };
     }
 
@@ -357,7 +383,8 @@ impl Notifications {
         let mut state = self.state.borrow_mut();
         let alive = replaces_id != 0
             && (state.current.as_ref().is_some_and(|n| n.id == replaces_id)
-                || state.queue.waiting.iter().any(|n| n.id == replaces_id));
+                || state.queue.waiting.iter().any(|n| n.id == replaces_id)
+                || state.list.history.contains(replaces_id));
         if alive {
             return replaces_id;
         }
@@ -379,7 +406,13 @@ impl Notifications {
 
     // ------------------------------------------------------------------ queue
 
-    fn add(self: &Rc<Self>, n: Notification) {
+    fn add(self: &Rc<Self>, mut n: Notification) {
+        n.received = glib::DateTime::now_local()
+            .and_then(|t| t.format("%H:%M"))
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        // An update to a listed one supersedes that entry.
+        self.forget(n.id);
         glib::g_debug!("gnutshell", "notification {} from {:?}", n.id, n.app_name);
         let banners = self.settings.as_ref().is_none_or(|s| s.boolean("show-banners"));
         if !banners && !n.critical {
@@ -389,8 +422,13 @@ impl Notifications {
                 self.take_current();
             }
             self.state.borrow_mut().queue.remove(n.id);
-            self.emit_closed(&n, Reason::Expired);
+            self.retire(n);
             self.show_next();
+            return;
+        }
+        // With the list open, new ones appear there instead of as banners.
+        if self.state.borrow().list.open {
+            self.retire(n);
             return;
         }
         let replaces_current = self.state.borrow().current.as_ref().is_some_and(|c| c.id == n.id);
@@ -404,22 +442,34 @@ impl Notifications {
         }
         let dropped = self.state.borrow_mut().queue.push(n);
         if let Some(dropped) = dropped {
-            self.emit_closed(&dropped, Reason::Expired);
+            self.retire(dropped);
         }
         self.show_next();
     }
 
     fn close(self: &Rc<Self>, id: u32, reason: Reason) {
+        // An app withdrawing a notification takes it out of the list too.
+        if reason == Reason::Closed {
+            self.forget(id);
+        }
         let is_current = self.state.borrow().current.as_ref().is_some_and(|c| c.id == id);
         if is_current {
             if let Some(n) = self.take_current() {
-                self.emit_closed(&n, reason);
+                self.finish(n, reason);
             }
             self.show_next();
             return;
         }
         let removed = self.state.borrow_mut().queue.remove(id);
         if let Some(n) = removed {
+            self.finish(n, reason);
+        }
+    }
+
+    fn finish(self: &Rc<Self>, n: Notification, reason: Reason) {
+        if reason == Reason::Expired {
+            self.retire(n);
+        } else {
             self.emit_closed(&n, reason);
         }
     }
@@ -453,7 +503,7 @@ impl Notifications {
     fn show_next(self: &Rc<Self>) {
         {
             let state = self.state.borrow();
-            if state.locked || state.current.is_some() {
+            if state.locked || state.list.open || state.current.is_some() {
                 return;
             }
         }
@@ -568,37 +618,12 @@ impl Notifications {
             // Room for the copy and close buttons.
             let text_width = width - x - PADDING - 2.0 * (CLOSE_SIZE + SPACING);
 
-            let mut y = PADDING - 2.0;
             let lines = [
                 (APP_FONT, n.app_name.as_str(), &ui::HINT_COLOR, 1.0),
                 (SUMMARY_FONT, n.summary.as_str(), &ui::TEXT_COLOR, 1.0),
                 (ui::BODY_FONT, n.body.as_str(), &ui::TEXT_COLOR, MAX_BODY_LINES),
             ];
-            for (font, text, color, max_lines) in lines {
-                if text.is_empty() {
-                    continue;
-                }
-                // The height of a one-line label caps the wrapped one.
-                let probe = ui::label(font, "Ag", color);
-                ffi::clutter_actor_add_child(self.root, probe);
-                let line = ffi::clutter_actor_get_height(probe);
-                ffi::clutter_actor_destroy(probe);
-
-                let label = ui::label(font, text, color);
-                let ct = label as *mut ClutterText;
-                ffi::clutter_text_set_ellipsize(ct, ffi::PANGO_ELLIPSIZE_END);
-                if max_lines > 1.0 {
-                    ffi::clutter_text_set_line_wrap(ct, 1);
-                } else {
-                    ffi::clutter_text_set_single_line_mode(ct, 1);
-                }
-                ffi::clutter_actor_add_child(self.root, label);
-                ffi::clutter_actor_set_width(label, text_width);
-                let height = ffi::clutter_actor_get_height(label).min(line * max_lines);
-                ffi::clutter_actor_set_size(label, text_width, height);
-                ffi::clutter_actor_set_position(label, x, y);
-                y += height + 2.0;
-            }
+            let mut y = add_lines(self.root, &lines, x, PADDING - 2.0, text_width);
             y = y.max(PADDING + ICON_SIZE) + PADDING - 2.0;
 
             let close = ui::button("✕", CLOSE_SIZE, CLOSE_SIZE, &ui::BUTTON_COLOR);
@@ -611,27 +636,7 @@ impl Notifications {
                 Some(true.to_value())
             });
 
-            let text = n.copy_text();
-            if !text.is_empty() {
-                let copy = ui::button("", CLOSE_SIZE, CLOSE_SIZE, &ui::BUTTON_COLOR);
-                ffi::clutter_actor_add_child(self.root, copy);
-                ffi::clutter_actor_set_position(copy, width - 2.0 * (CLOSE_SIZE + SPACING), SPACING);
-                self.set_button_icon(copy, "edit-copy-symbolic", "⧉", scale);
-                let weak = Rc::downgrade(self);
-                // Stays open; the check mark confirms the copy.
-                gobj(copy).connect_local("button-press-event", false, move |args| {
-                    let button = args[0].get::<glib::Object>().ok();
-                    with(&weak, |s| {
-                        if let Some(button) = &button
-                            && ui::set_clipboard(s.display, &text)
-                        {
-                            let button = button.as_ptr() as *mut ClutterActor;
-                            s.set_button_icon(button, "object-select-symbolic", "✓", scale);
-                        }
-                    });
-                    Some(true.to_value())
-                });
-            }
+            self.add_copy_button(self.root, n.copy_text(), width - 2.0 * (CLOSE_SIZE + SPACING), scale);
 
             let count = n.buttons.len().min(MAX_BUTTONS);
             if count > 0 {
@@ -653,6 +658,34 @@ impl Notifications {
             ffi::clutter_actor_set_size(self.root, width, y);
         }
         self.place();
+    }
+
+    /// A copy button at `x` along the top of `parent`, which must already be
+    /// parented. Nothing is added if there is no text.
+    fn add_copy_button(self: &Rc<Self>, parent: *mut ClutterActor, text: String, x: f32, scale: f32) {
+        if text.is_empty() {
+            return;
+        }
+        unsafe {
+            let copy = ui::button("", CLOSE_SIZE, CLOSE_SIZE, &ui::BUTTON_COLOR);
+            ffi::clutter_actor_add_child(parent, copy);
+            ffi::clutter_actor_set_position(copy, x, SPACING);
+            self.set_button_icon(copy, "edit-copy-symbolic", "⧉", scale);
+            let weak = Rc::downgrade(self);
+            // Stays open; the check mark confirms the copy.
+            gobj(copy).connect_local("button-press-event", false, move |args| {
+                let button = args[0].get::<glib::Object>().ok();
+                with(&weak, |s| {
+                    if let Some(button) = &button
+                        && ui::set_clipboard(s.display, &text)
+                    {
+                        let button = button.as_ptr() as *mut ClutterActor;
+                        s.set_button_icon(button, "object-select-symbolic", "✓", scale);
+                    }
+                });
+                Some(true.to_value())
+            });
+        }
     }
 
     /// Replace what is in a square header button with a symbolic icon, or
@@ -695,6 +728,45 @@ fn with(weak: &Weak<Notifications>, f: impl FnOnce(&Rc<Notifications>)) {
     if let Some(n) = weak.upgrade() {
         f(&n);
     }
+}
+
+/// Stack the non-empty `(font, text, color, max lines)` labels in `parent`
+/// from (`x`, `y`). Returns the y below the last one.
+unsafe fn add_lines(
+    parent: *mut ClutterActor,
+    lines: &[(&CStr, &str, &ffi::CoglColor, f32)],
+    x: f32,
+    mut y: f32,
+    width: f32,
+) -> f32 {
+    for &(font, text, color, max_lines) in lines {
+        if text.is_empty() {
+            continue;
+        }
+        unsafe {
+            // The height of a one-line label caps the wrapped one.
+            let probe = ui::label(font, "Ag", color);
+            ffi::clutter_actor_add_child(parent, probe);
+            let line = ffi::clutter_actor_get_height(probe);
+            ffi::clutter_actor_destroy(probe);
+
+            let label = ui::label(font, text, color);
+            let ct = label as *mut ClutterText;
+            ffi::clutter_text_set_ellipsize(ct, ffi::PANGO_ELLIPSIZE_END);
+            if max_lines > 1.0 {
+                ffi::clutter_text_set_line_wrap(ct, 1);
+            } else {
+                ffi::clutter_text_set_single_line_mode(ct, 1);
+            }
+            ffi::clutter_actor_add_child(parent, label);
+            ffi::clutter_actor_set_width(label, width);
+            let height = ffi::clutter_actor_get_height(label).min(line * max_lines);
+            ffi::clutter_actor_set_size(label, width, height);
+            ffi::clutter_actor_set_position(label, x, y);
+            y += height + 2.0;
+        }
+    }
+    y
 }
 
 /// The notification's picture, in the specification's priority order, then
@@ -857,6 +929,7 @@ fn parse_notify(params: &glib::Variant) -> Option<(u32, Notification)> {
         has_default,
         critical: hint("urgency").and_then(|v| v.get::<u8>()) == Some(2),
         resident: hint("resident").and_then(|v| v.get::<bool>()) == Some(true),
+        transient: hint("transient").and_then(|v| v.get::<bool>()) == Some(true),
         expire_timeout: params.child_value(7).get::<i32>()?,
         ..Default::default()
     };

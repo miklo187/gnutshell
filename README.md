@@ -30,7 +30,15 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   on the lock screen; waiting notifications show after unlock. Over a
   fullscreen window only critical ones show. With Do Not Disturb
   (`org.gnome.desktop.notifications show-banners` off), other notifications are
-  discarded.
+  not shown as banners.
+- Notification list: click the clock. It keeps notifications whose banner
+  timed out, including ones hidden by Do Not Disturb, newest first. A blue dot
+  next to the clock marks unread ones. Each entry has a copy button and ✕;
+  "Clear all" empties the list. Scroll or use Up/Down; Escape or a click
+  outside closes it. Dismissed, clicked and app-withdrawn notifications are
+  not listed, nor are `transient` ones. While the list is open, new
+  notifications appear in it instead of as banners. It holds up to 50 entries
+  in memory, so logging out clears it. Entries have no pictures or actions.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super to open a search field over a dimmed screen. Type to
   filter installed apps. Scroll with the mouse wheel or touchpad; use Up/Down or Tab to select, and Enter or a click to
@@ -211,6 +219,7 @@ All mutter options work (`--help`).
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
+| `src/notifications/list.rs` | Notification list opened from the clock |
 | `src/osd.rs` | Volume/brightness popup |
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
 | `src/lockscreen.rs` | Lock screen, `org.gnome.ScreenSaver`, logind lock/sleep, idle |
@@ -236,8 +245,7 @@ All mutter options work (`--help`).
 - **Only part of `org.gnome.Shell` is implemented**: accelerators, `ShowOSD`
   and the `Mode`/`OverviewActive` properties. Screenshots, screencasts, `Eval`
   and the extensions API are missing.
-- **No notification list yet.** A notification is gone once its banner closes,
-  including ones discarded by Do Not Disturb. Per-app notification settings,
+- **Notifications:** per-app notification settings,
   sounds and `org.gtk.Notifications` are not supported (GTK apps fall back to
   `org.freedesktop.Notifications`).
 - **Log Out doesn't ask apps to save first.** Under gnome-session it requests

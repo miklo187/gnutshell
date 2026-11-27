@@ -325,7 +325,7 @@ impl imp::GnutshellPlugin {
             *self.shell_dbus.borrow_mut() = Some(crate::shell_dbus::ShellService::new(display, osd.clone()));
             *self.osd.borrow_mut() = Some(osd);
             *self.notifications.borrow_mut() =
-                Some(crate::notifications::Notifications::new(display, stage, PANEL_HEIGHT as f32));
+                Some(crate::notifications::Notifications::new(display, stage, panel, clock, PANEL_HEIGHT as f32));
             let weak = self.obj().downgrade();
             let lock = crate::lockscreen::LockScreen::new(
                 display,
@@ -649,6 +649,10 @@ impl imp::GnutshellPlugin {
         unsafe {
             ffi::clutter_text_set_text(shell.clock as *mut ffi::ClutterText, text.as_ptr());
             center_in_panel(shell.clock, shell.panel);
+        }
+        let notifications = self.notifications.borrow().clone();
+        if let Some(n) = notifications {
+            n.place_clock();
         }
     }
 
