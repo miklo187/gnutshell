@@ -14,6 +14,7 @@ pub const DIM_COLOR: CoglColor = CoglColor::rgba(0, 0, 0, 0xa0);
 pub const BUTTON_COLOR: CoglColor = CoglColor::rgba(0x3a, 0x3a, 0x44, 0xff);
 pub const DESTRUCTIVE_COLOR: CoglColor = CoglColor::rgba(0xc0, 0x1c, 0x28, 0xff);
 pub const TRANSPARENT: CoglColor = CoglColor::rgba(0, 0, 0, 0);
+pub const PANEL_HOVER_COLOR: CoglColor = CoglColor::rgba(0xff, 0xff, 0xff, 0x20);
 
 pub const ROW_FONT: &CStr = c"Sans 12";
 pub const BODY_FONT: &CStr = c"Sans 11";
@@ -245,6 +246,41 @@ pub unsafe fn list_row(
         ffi::clutter_actor_set_position(label, x, y.floor());
         row
     }
+}
+
+/// Add a button to `panel` at `x`, with an icon made of filled rectangles
+/// (`x`, `y`, `width`, `height` within the button), so that it does not depend
+/// on the icon theme. `pressed` runs on a primary click.
+pub fn panel_button(
+    panel: *mut ClutterActor,
+    x: f32,
+    width: f32,
+    height: f32,
+    shapes: &[(f32, f32, f32, f32)],
+    pressed: impl Fn() + 'static,
+) {
+    let button = unsafe {
+        let button = ffi::clutter_actor_new();
+        ffi::clutter_actor_set_size(button, width, height);
+        ffi::clutter_actor_set_position(button, x, 0.0);
+        ffi::clutter_actor_set_reactive(button, 1);
+        for &(x, y, w, h) in shapes {
+            let shape = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_background_color(shape, &TEXT_COLOR);
+            ffi::clutter_actor_set_size(shape, w, h);
+            ffi::clutter_actor_set_position(shape, x, y);
+            ffi::clutter_actor_add_child(button, shape);
+        }
+        ffi::clutter_actor_add_child(panel, button);
+        button
+    };
+    crate::windows::hover_highlight(button, TRANSPARENT, PANEL_HOVER_COLOR);
+    unsafe { gobj(button) }.connect_local("button-press-event", false, move |args| {
+        if unsafe { ffi::clutter_event_get_button(event_arg(args)) } == 1 {
+            pressed();
+        }
+        Some(true.to_value())
+    });
 }
 
 /// A reactive button: filled box with a centered label. Floating until parented.

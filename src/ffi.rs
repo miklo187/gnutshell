@@ -120,6 +120,7 @@ pub struct RsvgRectangle {
 // ---------------------------------------------------------------- enums
 
 pub const META_SIDE_TOP: c_int = 1 << 2;
+pub const META_SIDE_BOTTOM: c_int = 1 << 3;
 pub const META_WINDOW_NORMAL: c_int = 0;
 pub const CLUTTER_EASE_OUT_QUAD: c_int = 3;
 pub const CLUTTER_EASE_OUT_CUBIC: c_int = 6;
@@ -457,6 +458,12 @@ unsafe extern "C" {
     pub fn meta_window_get_title(window: *mut MetaWindow) -> *const c_char;
     pub fn meta_window_get_wm_class(window: *mut MetaWindow) -> *const c_char;
     pub fn meta_window_get_id(window: *mut MetaWindow) -> u64;
+    // taskbar and window overview
+    pub fn meta_window_get_compositor_private(window: *mut MetaWindow) -> *mut gobject_sys::GObject;
+    pub fn meta_window_get_buffer_rect(window: *mut MetaWindow, rect: *mut MtkRectangle);
+    pub fn meta_window_get_stable_sequence(window: *mut MetaWindow) -> u32;
+    pub fn meta_window_minimize(window: *mut MetaWindow);
+    pub fn clutter_actor_set_clip_to_allocation(actor: *mut ClutterActor, clip: gboolean);
     pub fn meta_window_get_frame_rect(window: *mut MetaWindow, rect: *mut MtkRectangle);
     pub fn clutter_text_set_ellipsize(text: *mut ClutterText, mode: c_int);
     pub fn clutter_text_set_line_wrap(text: *mut ClutterText, wrap: gboolean);

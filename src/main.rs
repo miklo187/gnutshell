@@ -12,6 +12,7 @@ mod launcher;
 mod lockscreen;
 mod notifications;
 mod osd;
+mod overview;
 mod pam;
 mod plugin;
 mod polkit;
@@ -20,7 +21,9 @@ mod session;
 mod shell_dbus;
 mod status;
 mod switcher;
+mod taskbar;
 mod ui;
+mod windows;
 mod workspaces;
 
 use glib::prelude::*;

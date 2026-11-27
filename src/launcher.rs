@@ -26,7 +26,6 @@ const BAR_WIDTH: f32 = 14.0;
 const BAR_HEIGHT: f32 = 2.0;
 /// From the top of one bar of the button's icon to the next.
 const BAR_STEP: f32 = 5.0;
-const HOVER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x20);
 /// Space between rows and the scrollbar.
 const SCROLLBAR_GAP: f32 = 10.0;
 const SCROLLBAR_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x50);
@@ -383,38 +382,12 @@ impl Launcher {
 }
 
 /// Add the three-bar button at the left end of `panel`; `pressed` runs on a
-/// primary click. The panel owns the actor.
+/// primary click.
 pub fn add_panel_button(panel: *mut ClutterActor, height: f32, pressed: impl Fn() + 'static) {
-    let button = unsafe {
-        let button = ffi::clutter_actor_new();
-        ffi::clutter_actor_set_size(button, PANEL_BUTTON_WIDTH, height);
-        ffi::clutter_actor_set_reactive(button, 1);
-        // Drawn from plain actors, so it does not depend on the icon theme.
-        let x = ((PANEL_BUTTON_WIDTH - BAR_WIDTH) / 2.0).floor();
-        let top = ((height - (2.0 * BAR_STEP + BAR_HEIGHT)) / 2.0).floor();
-        for i in 0..3 {
-            let bar = ffi::clutter_actor_new();
-            ffi::clutter_actor_set_background_color(bar, &TEXT_COLOR);
-            ffi::clutter_actor_set_size(bar, BAR_WIDTH, BAR_HEIGHT);
-            ffi::clutter_actor_set_position(bar, x, top + i as f32 * BAR_STEP);
-            ffi::clutter_actor_add_child(button, bar);
-        }
-        ffi::clutter_actor_add_child(panel, button);
-        button
-    };
-    let object = unsafe { gobj(button) };
-    for (signal, color) in [("enter-event", HOVER_COLOR), ("leave-event", ui::TRANSPARENT)] {
-        object.connect_local(signal, false, move |_| {
-            unsafe { ffi::clutter_actor_set_background_color(button, &color) };
-            Some(false.to_value())
-        });
-    }
-    object.connect_local("button-press-event", false, move |args| {
-        if unsafe { ffi::clutter_event_get_button(ui::event_arg(args)) } == 1 {
-            pressed();
-        }
-        Some(true.to_value())
-    });
+    let x = ((PANEL_BUTTON_WIDTH - BAR_WIDTH) / 2.0).floor();
+    let top = ((height - (2.0 * BAR_STEP + BAR_HEIGHT)) / 2.0).floor();
+    let bars: Vec<_> = (0..3).map(|i| (x, top + i as f32 * BAR_STEP, BAR_WIDTH, BAR_HEIGHT)).collect();
+    ui::panel_button(panel, 0.0, PANEL_BUTTON_WIDTH, height, &bars, pressed);
 }
 
 /// Rank apps against `query`. Empty query lists everything alphabetically.

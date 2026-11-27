@@ -7,11 +7,11 @@
 //! quick Alt+Tab just flips to the previous window without flashing UI.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay, MetaWindow};
-use crate::icons;
 use crate::ui::{self, gobj};
-use gio::prelude::*;
+use crate::windows;
+use glib::prelude::*;
 use std::cell::RefCell;
-use std::ffi::{c_char, CStr};
+use std::ffi::CStr;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
@@ -256,9 +256,9 @@ impl Switcher {
     fn render(&self) {
         let state = self.state.borrow();
         let scale = ui::primary_monitor_scale(self.display);
-        let titles: Vec<String> = state.windows.iter().map(window_title).collect();
+        let titles: Vec<String> = state.windows.iter().map(windows::title).collect();
         let icons: Vec<Option<glib::Object>> =
-            state.windows.iter().map(|w| window_icon(w, scale, self.stage)).collect();
+            state.windows.iter().map(|w| windows::icon(w, ui::ROW_ICON_SIZE, scale, self.stage)).collect();
         let selected = state.selected;
         drop(state);
 
@@ -302,29 +302,6 @@ fn visible_start(len: usize, max: usize, selected: usize) -> usize {
         return 0;
     }
     selected.saturating_sub(max / 2).min(len - max)
-}
-
-fn window_title(window: &glib::Object) -> String {
-    unsafe {
-        let w = window.as_ptr() as *mut MetaWindow;
-        let title = cstr(ffi::meta_window_get_title(w));
-        let class = cstr(ffi::meta_window_get_wm_class(w));
-        match (title.is_empty(), class.is_empty()) {
-            (false, _) => title,
-            (true, false) => class,
-            (true, true) => "Untitled window".into(),
-        }
-    }
-}
-
-fn window_icon(window: &glib::Object, scale: f32, stage: *mut ClutterActor) -> Option<glib::Object> {
-    let app = icons::app_for_window(window.as_ptr() as *mut MetaWindow);
-    let icon = app.and_then(|a| a.icon());
-    icons::content(icon.as_ref(), ui::ROW_ICON_SIZE, scale, stage)
-}
-
-unsafe fn cstr(p: *const c_char) -> String {
-    if p.is_null() { String::new() } else { unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned() }
 }
 
 fn with(weak: &Weak<Switcher>, f: impl FnOnce(&Rc<Switcher>)) {

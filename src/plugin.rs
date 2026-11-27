@@ -3,6 +3,8 @@
 use crate::background::Background;
 use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
+use crate::overview::Overview;
+use crate::taskbar::Taskbar;
 use crate::session::SessionMenu;
 use crate::switcher::Switcher;
 use crate::ui::gobj;
@@ -161,6 +163,9 @@ struct Shell {
     panel: *mut ClutterActor,
     clock: *mut ClutterActor,
     background: Rc<Background>,
+    taskbar: Rc<Taskbar>,
+    window_tracker: Rc<crate::windows::Tracker>,
+    overview: Rc<Overview>,
 }
 
 mod imp {
@@ -201,6 +206,11 @@ mod imp {
 
         fn map(&self, actor: *mut ClutterActor) {
             self.animate(actor, Effect::Map);
+            // The window has a picture from now on.
+            let tracker = self.shell.borrow().as_ref().map(|s| s.window_tracker.clone());
+            if let Some(tracker) = tracker {
+                tracker.queue();
+            }
         }
 
         fn destroy(&self, actor: *mut ClutterActor) {
@@ -271,6 +281,10 @@ impl imp::GnutshellPlugin {
     fn on_lock_changed(&self, locked: bool) {
         if locked {
             // These hold stage grabs of their own; close them first.
+            if let Some((overview, taskbar)) = self.window_views() {
+                overview.hide();
+                taskbar.hide_preview();
+            }
             if let Some(l) = self.launcher.borrow().clone() {
                 l.hide();
             }
@@ -322,7 +336,34 @@ impl imp::GnutshellPlugin {
                 }
             });
 
-            *self.shell.borrow_mut() = Some(Shell { display, panel, clock, background });
+            let weak = self.obj().downgrade();
+            crate::overview::add_panel_button(
+                panel,
+                crate::launcher::PANEL_BUTTON_WIDTH,
+                PANEL_HEIGHT as f32,
+                move || {
+                    if let Some(plugin) = weak.upgrade() {
+                        plugin.imp().toggle_overview();
+                    }
+                },
+            );
+            // Before the modal overlays, which have to cover the taskbar.
+            let taskbar = Taskbar::new(display, stage, &PANEL_COLOR);
+            let overview = Overview::new(display, stage);
+            let window_tracker = crate::windows::Tracker::new(display);
+            let weak_bar = Rc::downgrade(&taskbar);
+            let weak_overview = Rc::downgrade(&overview);
+            window_tracker.listen(move || {
+                if let Some(taskbar) = weak_bar.upgrade() {
+                    taskbar.refresh();
+                }
+                if let Some(overview) = weak_overview.upgrade() {
+                    overview.refresh();
+                }
+            });
+
+            *self.shell.borrow_mut() =
+                Some(Shell { display, panel, clock, background, taskbar, window_tracker, overview });
             crate::icons::watch_theme_changes();
             *self.launcher.borrow_mut() = Some(Launcher::new(display, stage));
             *self.switcher.borrow_mut() = Some(Switcher::new(display, stage));
@@ -677,10 +718,29 @@ impl imp::GnutshellPlugin {
         });
     }
 
+    /// The overview and the taskbar, without keeping the shell borrowed.
+    fn window_views(&self) -> Option<(Rc<Overview>, Rc<Taskbar>)> {
+        self.shell.borrow().as_ref().map(|s| (s.overview.clone(), s.taskbar.clone()))
+    }
+
+    fn toggle_overview(&self) {
+        if crate::lockscreen::is_locked() {
+            return;
+        }
+        if let Some((overview, taskbar)) = self.window_views() {
+            taskbar.hide_preview();
+            overview.toggle();
+        }
+    }
+
     /// Toggle the built-in launcher, or run $GNUTSHELL_LAUNCHER.
     fn toggle_launcher(&self) {
         if crate::lockscreen::is_locked() {
             return;
+        }
+        if let Some((overview, taskbar)) = self.window_views() {
+            overview.hide();
+            taskbar.hide_preview();
         }
         if let Ok(cmd) = std::env::var("GNUTSHELL_LAUNCHER") {
             if let Err(e) = glib::spawn_command_line_async(cmd.as_str()) {
@@ -762,21 +822,37 @@ impl imp::GnutshellPlugin {
                 n.sync();
             }
 
-            if ffi::meta_display_get_monitor_in_fullscreen(display, primary) != 0 {
+            let fullscreen = ffi::meta_display_get_monitor_in_fullscreen(display, primary) != 0;
+            if fullscreen {
                 ffi::clutter_actor_hide(shell.panel);
             } else {
                 ffi::clutter_actor_show(shell.panel);
             }
+            shell.taskbar.relayout(geo);
+            shell.taskbar.set_visible(!fullscreen);
+            shell.overview.refresh();
 
-            // Reserve the panel area so maximized windows don't cover it.
-            let mut strut = ffi::MetaStrut {
-                rect: MtkRectangle { x: geo.x, y: geo.y, width: geo.width, height: PANEL_HEIGHT },
-                side: ffi::META_SIDE_TOP,
-            };
-            let list = glib_sys::g_slist_prepend(
-                std::ptr::null_mut(),
-                &mut strut as *mut _ as glib_sys::gpointer,
-            );
+            // Reserve the panel and taskbar areas so maximized windows don't
+            // cover them.
+            let mut struts = [
+                ffi::MetaStrut {
+                    rect: MtkRectangle { x: geo.x, y: geo.y, width: geo.width, height: PANEL_HEIGHT },
+                    side: ffi::META_SIDE_TOP,
+                },
+                ffi::MetaStrut {
+                    rect: MtkRectangle {
+                        x: geo.x,
+                        y: geo.y + geo.height - crate::taskbar::HEIGHT,
+                        width: geo.width,
+                        height: crate::taskbar::HEIGHT,
+                    },
+                    side: ffi::META_SIDE_BOTTOM,
+                },
+            ];
+            let mut list = std::ptr::null_mut();
+            for strut in &mut struts {
+                list = glib_sys::g_slist_prepend(list, strut as *mut _ as glib_sys::gpointer);
+            }
             let wm = ffi::meta_display_get_workspace_manager(display);
             for i in 0..ffi::meta_workspace_manager_get_n_workspaces(wm) {
                 let ws = ffi::meta_workspace_manager_get_workspace_by_index(wm, i);
@@ -827,6 +903,9 @@ impl imp::GnutshellPlugin {
         }
         drop(self.polkit_agent.borrow_mut().take()); // unregisters
         let Some(shell) = self.shell.borrow_mut().take() else { return };
+        shell.window_tracker.destroy();
+        shell.overview.destroy();
+        shell.taskbar.destroy();
         unsafe {
             ffi::clutter_actor_destroy(shell.panel); // also destroys the clock
         }

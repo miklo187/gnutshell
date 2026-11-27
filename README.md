@@ -21,6 +21,18 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 - Top panel with a centered clock. The panel reserves screen space through workspace
   struts, so maximized windows stay below it. The panel hides when the primary monitor
   shows a fullscreen window.
+- Taskbar: a bar along the bottom of the primary monitor with one entry per
+  open window, from all workspaces, oldest first. Click an entry to focus the
+  window (switching workspace if needed), or to minimize it if it already has
+  the focus. Minimized windows are dimmed. Rest the pointer on an entry for a
+  live preview of the window. Entries shrink as windows are added, down to
+  icons only; the bar does not scroll. Like the panel, it reserves screen space
+  and hides when the primary monitor shows a fullscreen window.
+- Window overview: the four-square button at the left of the panel shows every
+  open window, from all workspaces, as a tile with a live picture. Click a tile
+  or use the arrow keys and Enter; Escape or a click outside closes it. When
+  the tiles do not fit, scroll with the wheel or touchpad, or drag the
+  scrollbar. It has no keyboard shortcut.
 - Session menu: a power button at the right of the panel opens Lock, Suspend,
   Restart, Power Off and Log Out. Mouse or keyboard (Up/Down, Enter,
   Escape). Lock and Suspend act at once; actions that logind reports as
@@ -122,7 +134,7 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   off, every shortcut is blocked except VT switching, layout switching and
   media keys that gsd allows on the lock screen, and polkit prompts wait.
   logind's LockedHint and `ActiveChanged` are kept up to date.
-- Workspaces: a panel indicator on the left, next to the launcher button (one dot per workspace, the
+- Workspaces: a panel indicator on the left, next to the launcher and overview buttons (one dot per workspace, the
   active one wider; click a dot to switch, scroll over it to step), and a
   slide animation when switching (Super+PageUp/PageDown, Ctrl+Alt+arrows and
   the other mutter workspace shortcuts). With `org.gnome.mutter
@@ -271,6 +283,9 @@ All mutter options work (`--help`).
 | `src/background.rs` | Desktop background: settings, picture loading |
 | `src/launcher.rs` | Modal app launcher + ranking (unit-tested) |
 | `src/switcher.rs` | Alt+Tab window switcher |
+| `src/taskbar.rs` | Taskbar with window previews |
+| `src/overview.rs` | Window overview tiles and their scrollbar |
+| `src/windows.rs` | Window list, change tracking and thumbnails for both |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
