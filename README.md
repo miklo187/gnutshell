@@ -104,6 +104,13 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   not listed, nor are `transient` ones. While the list is open, new
   notifications appear in it instead of as banners. It holds up to 50 entries
   in memory, so logging out clears it. Entries have no pictures or actions.
+- Calendar: a month view right of the notification list, in the same popup.
+  Month and day names and the first day of the week follow your `LC_TIME`
+  locale, and week numbers (ISO) show if
+  `org.gnome.desktop.calendar show-weekdate` is on. Change the month with ‹ ›,
+  Left/Right or by scrolling over the calendar; click the date at the top or
+  press Home to return to today. It shows no events, and clicking a day does
+  nothing. On a monitor too narrow for both, only the list shows.
 - Screenshots: `Print` dims the screen; drag to take that area, press Enter
   for the whole screen or Escape to cancel. `Shift+Print` takes the whole
   screen and `Alt+Print` the focused window. The keys come from
@@ -333,6 +340,7 @@ All mutter options work (`--help`).
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
 | `src/notifications/list.rs` | Notification list opened from the clock |
+| `src/notifications/calendar.rs` | Month view beside the list |
 | `src/notifications/policy.rs` | Per-app notification settings, Do Not Disturb, sounds |
 | `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
 | `src/status.rs` | Panel network, volume and battery icons |

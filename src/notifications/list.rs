@@ -1,10 +1,12 @@
 //! The notification list: notifications whose banner went away without the
 //! user acting on it, kept so they can be read and copied later. A click on
-//! the panel clock opens it; a dot next to the clock marks unread ones.
+//! the panel clock opens it, with the calendar beside it; a dot next to the
+//! clock marks unread ones.
 //!
 //! Listed notifications are already closed as far as the sending app knows,
 //! so they have no actions. The list lives in memory only.
 
+use super::calendar;
 use super::{
     APP_FONT, CLOSE_SIZE, MAX_BODY_LINES, Notification, Notifications, PADDING, SPACING, SUMMARY_FONT, WIDTH, with,
 };
@@ -23,6 +25,7 @@ const CLOCK_PADDING: f32 = 14.0;
 const DOT_SIZE: f32 = 6.0;
 const HEADER_FONT: &CStr = c"Sans Bold 12";
 const HOVER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x20);
+const DIVIDER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x28);
 const CARD_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0x2a, 0x2a, 0x32, 0xff);
 
 /// Closed notifications, newest first.
@@ -80,6 +83,9 @@ pub struct ListState {
     /// Whether the oldest entry is on screen.
     at_end: bool,
     scroll: f64,
+    /// Months from the current one to the one the calendar shows.
+    pub month: i32,
+    pub month_scroll: f64,
 }
 
 impl ListView {
@@ -138,11 +144,17 @@ impl Notifications {
         let weak = Rc::downgrade(self);
         overlay.connect_local("key-press-event", false, move |args| {
             let key = ui::key_symbol(ui::event_arg(args));
-            let handled = matches!(key, ui::KEY_ESCAPE | ui::KEY_UP | ui::KEY_DOWN);
+            let handled = matches!(
+                key,
+                ui::KEY_ESCAPE | ui::KEY_UP | ui::KEY_DOWN | ui::KEY_LEFT | ui::KEY_RIGHT | ui::KEY_HOME
+            );
             with(&weak, |n| match key {
                 ui::KEY_ESCAPE => n.close_list(),
                 ui::KEY_UP => n.scroll_list(-1),
                 ui::KEY_DOWN => n.scroll_list(1),
+                ui::KEY_LEFT => n.turn_month(-1),
+                ui::KEY_RIGHT => n.turn_month(1),
+                ui::KEY_HOME => n.show_current_month(),
                 _ => {}
             });
             Some(handled.to_value())
@@ -191,6 +203,8 @@ impl Notifications {
             state.list.open = true;
             state.list.offset = 0;
             state.list.scroll = 0.0;
+            state.list.month = 0;
+            state.list.month_scroll = 0.0;
         }
         // The banner and everything still waiting move into the list, oldest
         // first so that the newest ends up on top.
@@ -323,6 +337,9 @@ impl Notifications {
             (list.history.entries.iter().cloned().collect::<Vec<_>>(), list.offset)
         };
         let width = WIDTH.min(geo.width as f32 - 32.0);
+        // Left out where there is no room beside the list.
+        let calendar_width = Some(calendar::width()).filter(|w| width + w <= geo.width as f32 - 32.0);
+        let box_width = width + calendar_width.map_or(0.0, |w| w + 1.0);
         let max_height = geo.height as f32 - self.panel_height - 2.0 * PADDING;
         let panel_box = self.view.panel_box;
         let mut at_end = true;
@@ -369,10 +386,18 @@ impl Notifications {
 
             ffi::clutter_actor_set_position(self.view.overlay, geo.x as f32, geo.y as f32);
             ffi::clutter_actor_set_size(self.view.overlay, geo.width as f32, geo.height as f32);
-            ffi::clutter_actor_set_size(panel_box, width, y);
+            if calendar_width.is_some() {
+                y = y.max(self.add_calendar(panel_box, width + 1.0));
+                let line = ffi::clutter_actor_new();
+                ffi::clutter_actor_set_background_color(line, &DIVIDER_COLOR);
+                ffi::clutter_actor_set_size(line, 1.0, y - 2.0 * SPACING);
+                ffi::clutter_actor_set_position(line, width, SPACING);
+                ffi::clutter_actor_add_child(panel_box, line);
+            }
+            ffi::clutter_actor_set_size(panel_box, box_width, y);
             ffi::clutter_actor_set_position(
                 panel_box,
-                ((geo.width as f32 - width) / 2.0).floor(),
+                ((geo.width as f32 - box_width) / 2.0).floor(),
                 self.panel_height + SPACING,
             );
         }

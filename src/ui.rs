@@ -28,6 +28,7 @@ pub const KEY_RETURN: u32 = 0xff0d;
 pub const KEY_KP_ENTER: u32 = 0xff8d;
 pub const KEY_TAB: u32 = 0xff09;
 pub const KEY_ISO_LEFT_TAB: u32 = 0xfe20;
+pub const KEY_HOME: u32 = 0xff50;
 pub const KEY_LEFT: u32 = 0xff51;
 pub const KEY_UP: u32 = 0xff52;
 pub const KEY_RIGHT: u32 = 0xff53;

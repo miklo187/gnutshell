@@ -12,6 +12,7 @@
 //! non-critical notifications are closed at once and only listed. Per-app
 //! settings and sounds are in `policy.rs`.
 
+mod calendar;
 mod list;
 mod policy;
 
