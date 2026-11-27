@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (not yet released)
+## 0.1.0 (2026-11-28)
 
 First version. A GNOME-style shell on mutter 51, run by gnome-session.
 
