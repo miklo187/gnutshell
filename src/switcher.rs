@@ -91,7 +91,9 @@ impl Switcher {
         *self.delay.borrow_mut() = Some(id);
     }
 
-    /// Activate the selected window and close.
+    /// Activate the selected window and close, as releasing the modifier
+    /// does (used by the debug hook).
+    #[cfg(debug_assertions)]
     pub fn finish(&self) {
         self.cancel_delay();
         self.tiles.activate_selected();

@@ -140,6 +140,11 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   systemd user unit `gnutshell.service`. gnome-session starts
   gnome-settings-daemon (power, color/night light, keyboard, media keys,
   housekeeping, …) and the autostart apps.
+- X11 apps: when mutter starts Xwayland, gnutshell starts gnome-session's X11
+  services (`gnome-session-x11-services-ready.target`), as gnome-shell does.
+  Their gsd-xsettings gives X11 apps such as Steam the font DPI for the monitor
+  scale, plus fonts, theme and cursor size. Nested and console runs have no
+  such services.
 - Media keys and custom shortcuts: gnutshell provides the accelerator part of
   gnome-shell's `org.gnome.Shell` D-Bus API, which gsd-media-keys uses to bind
   volume, brightness, media and custom shortcut keys. As in gnome-shell, only
@@ -260,6 +265,11 @@ saves raw BGRA screenshots at those times.
 Log Out in tests: the other entries really suspend, restart or power off
 (without gnome-session, once confirmed).
 
+**X11 service variables in tests:** your session exports `GNOME_SETUP_DISPLAY`,
+the display that session services connect to. Unset it in nested test shells
+(`env -u GNOME_SETUP_DISPLAY`), so nothing started there reaches your real X
+server.
+
 **Isolated settings in tests:** set `XDG_CONFIG_HOME` to a temporary directory
 *before* `dbus-run-session`, not inside it. Otherwise the private bus starts
 `dconf-service` with your real config, and `gsettings set` changes your own
@@ -317,6 +327,7 @@ All mutter options work (`--help`).
 | `src/overview.rs` | Window tiles for the overview and Alt+Tab, with scrollbar |
 | `src/windows.rs` | Window list, change tracking and thumbnails for both |
 | `src/polkit.rs` | `PolkitAgentListener` subclass + authentication dialog |
+| `src/x11.rs` | Starts gnome-session's X11 services with Xwayland |
 | `src/shell_dbus.rs` | `org.gnome.Shell` subset: accelerators, OSD, properties |
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
 | `src/notifications/list.rs` | Notification list opened from the clock |

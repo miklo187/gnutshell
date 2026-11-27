@@ -28,6 +28,7 @@ mod ui;
 mod window_menu;
 mod windows;
 mod workspaces;
+mod x11;
 
 use glib::prelude::*;
 use glib::translate::*;

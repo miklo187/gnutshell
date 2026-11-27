@@ -777,6 +777,8 @@ impl imp::GnutshellPlugin {
         let monitor_manager = unsafe { gobj(ffi::meta_backend_get_monitor_manager(backend)) };
         let workspace_manager = unsafe { gobj(ffi::meta_display_get_workspace_manager(display)) };
 
+        crate::x11::connect(&display_obj);
+
         // Diagnostics: G_MESSAGES_DEBUG=gnutshell
         for sig in ["window-created", "window-demands-attention", "window-marked-urgent"] {
             display_obj.connect_local(sig, false, move |args| {
