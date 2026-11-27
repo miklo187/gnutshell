@@ -239,10 +239,10 @@ impl LockScreen {
             return;
         }
         if self.lock_disabled() {
-            glib::g_message!("gnative", "locking is disabled by org.gnome.desktop.lockdown");
+            glib::g_message!("gnutshell", "locking is disabled by org.gnome.desktop.lockdown");
             return;
         }
-        glib::g_message!("gnative", "locking the screen");
+        glib::g_message!("gnutshell", "locking the screen");
         LOCKED.set(true);
         self.state.borrow_mut().locked_since = Some(Instant::now());
         // Close popups and park dialogs first: they hold their own grabs.
@@ -282,7 +282,7 @@ impl LockScreen {
         if !self.is_locked() {
             return;
         }
-        glib::g_message!("gnative", "unlocked");
+        glib::g_message!("gnutshell", "unlocked");
         let (grab, clock) = {
             let mut state = self.state.borrow_mut();
             state.locked_since = None;
@@ -475,7 +475,7 @@ impl LockScreen {
                 gio::Cancellable::NONE,
                 |r| {
                     if let Err(e) = r {
-                        glib::g_debug!("gnative", "SetLockedHint failed: {e}");
+                        glib::g_debug!("gnutshell", "SetLockedHint failed: {e}");
                     }
                 },
             );
@@ -537,12 +537,12 @@ impl LockScreen {
                 let mut state = lock.state.borrow_mut();
                 match reg {
                     Ok(id) => state.registration = Some(id),
-                    Err(e) => glib::g_warning!("gnative", "could not export /org/gnome/ScreenSaver: {e}"),
+                    Err(e) => glib::g_warning!("gnutshell", "could not export /org/gnome/ScreenSaver: {e}"),
                 }
                 state.session_bus = Some(connection);
             },
             |_, _| {},
-            |_, name| glib::g_warning!("gnative", "could not own {name}"),
+            |_, name| glib::g_warning!("gnutshell", "could not own {name}"),
         );
         self.state.borrow_mut().owner = Some(owner);
     }
@@ -592,7 +592,7 @@ impl LockScreen {
                     let path = match result {
                         Ok(v) => v.child_value(0).str().map(str::to_owned),
                         Err(e) => {
-                            glib::g_debug!("gnative", "no logind session ({e}); lock signals unavailable");
+                            glib::g_debug!("gnutshell", "no logind session ({e}); lock signals unavailable");
                             None
                         }
                     };
@@ -696,7 +696,7 @@ impl LockScreen {
             "/org/freedesktop/login1",
             "org.freedesktop.login1.Manager",
             "Inhibit",
-            Some(&("sleep", "gnative", "Lock the screen before suspending", "delay").to_variant()),
+            Some(&("sleep", "gnutshell", "Lock the screen before suspending", "delay").to_variant()),
             Some(glib::VariantTy::new("(h)").unwrap()),
             gio::DBusCallFlags::NONE,
             -1,
@@ -710,7 +710,7 @@ impl LockScreen {
                     }
                     Ok(_) => None,
                     Err(e) => {
-                        glib::g_debug!("gnative", "sleep inhibitor unavailable: {e}");
+                        glib::g_debug!("gnutshell", "sleep inhibitor unavailable: {e}");
                         None
                     }
                 };

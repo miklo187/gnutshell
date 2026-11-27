@@ -346,8 +346,8 @@ impl Launcher {
             app.launch(&[], Some(&ctx))
         };
         match result {
-            Ok(()) => glib::g_message!("gnative", "launched {}", app.id().unwrap_or_default()),
-            Err(e) => glib::g_warning!("gnative", "failed to launch {}: {e}", app.display_name()),
+            Ok(()) => glib::g_message!("gnutshell", "launched {}", app.id().unwrap_or_default()),
+            Err(e) => glib::g_warning!("gnutshell", "failed to launch {}: {e}", app.display_name()),
         }
     }
 

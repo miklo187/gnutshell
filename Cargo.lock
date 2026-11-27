@@ -185,7 +185,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gnative"
+name = "gnutshell"
 version = "0.1.0"
 dependencies = [
  "gio",

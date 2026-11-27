@@ -135,8 +135,8 @@ impl ShellService {
                     inner.export(connection);
                 }
             },
-            |_, name| glib::g_debug!("gnative", "acquired {name}"),
-            |_, name| glib::g_warning!("gnative", "could not own {name} (is another shell running?)"),
+            |_, name| glib::g_debug!("gnutshell", "acquired {name}"),
+            |_, name| glib::g_warning!("gnutshell", "could not own {name} (is another shell running?)"),
         );
         Self { inner, owner: Some(owner) }
     }
@@ -174,7 +174,7 @@ impl Inner {
             .build();
         match registration {
             Ok(id) => *self.registration.borrow_mut() = Some(id),
-            Err(e) => glib::g_warning!("gnative", "could not export {OBJECT_PATH}: {e}"),
+            Err(e) => glib::g_warning!("gnutshell", "could not export {OBJECT_PATH}: {e}"),
         }
 
         for name in ALLOWED_CALLERS {
@@ -267,7 +267,7 @@ impl Inner {
             }
             _ => invocation.return_dbus_error(
                 "org.freedesktop.DBus.Error.UnknownMethod",
-                &format!("{method} is not implemented by gnative"),
+                &format!("{method} is not implemented by gnutshell"),
             ),
         }
     }
@@ -303,10 +303,10 @@ impl Inner {
         let Ok(c) = std::ffi::CString::new(accelerator) else { return ACTION_NONE };
         let action = unsafe { ffi::meta_display_grab_accelerator(self.display, c.as_ptr(), flags) };
         if action == ACTION_NONE {
-            glib::g_debug!("gnative", "grab of {accelerator:?} failed");
+            glib::g_debug!("gnutshell", "grab of {accelerator:?} failed");
             return ACTION_NONE;
         }
-        glib::g_debug!("gnative", "grabbed {accelerator:?} as action {action} for {sender}");
+        glib::g_debug!("gnutshell", "grabbed {accelerator:?} as action {action} for {sender}");
         self.grabs.borrow_mut().insert(action, sender.to_owned());
         LOCK_SAFE.with_borrow_mut(|s| {
             if mode & ACTION_MODE_LOCK_SCREEN != 0 {
@@ -352,7 +352,7 @@ impl Inner {
                 for action in actions {
                     inner.ungrab(action, name);
                 }
-                glib::g_debug!("gnative", "{name} left the bus; released its accelerators");
+                glib::g_debug!("gnutshell", "{name} left the bus; released its accelerators");
                 if let Some(id) = inner.grabbers.borrow_mut().remove(name) {
                     // Unwatching from inside the callback is fine in GIO, but
                     // defer it to keep the closure alive until it returns.
@@ -385,7 +385,7 @@ impl Inner {
         }
         let body = glib::Variant::tuple_from_iter([action.to_variant(), params.end()]);
         if let Err(e) = connection.emit_signal(Some(&destination), OBJECT_PATH, INTERFACE, signal, Some(&body)) {
-            glib::g_warning!("gnative", "could not emit {signal}: {e}");
+            glib::g_warning!("gnutshell", "could not emit {signal}: {e}");
         }
     }
 

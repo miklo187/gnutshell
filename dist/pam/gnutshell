@@ -1,0 +1,4 @@
+#%PAM-1.0
+# Lock screen password check (gnutshell). Same rules as a console login.
+auth     include  login
+account  include  login

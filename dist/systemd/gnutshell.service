@@ -1,7 +1,7 @@
-# The gnative compositor inside a gnome-session session.
+# The gnutshell compositor inside a gnome-session session.
 # Modeled on gnome-shell's org.gnome.Shell@.service.
 [Unit]
-Description=gnative shell
+Description=gnutshell shell
 OnFailure=gnome-session-shutdown.target
 OnFailureJobMode=replace-irreversibly
 CollectMode=inactive-or-failed
@@ -18,9 +18,9 @@ AssertEnvironment=XDG_SESSION_TYPE=wayland
 
 [Service]
 Slice=session.slice
-# gnative sends READY=1 once the compositor is up.
+# gnutshell sends READY=1 once the compositor is up.
 Type=notify
-ExecStart=/usr/local/bin/gnative --wayland --display-server
+ExecStart=/usr/local/bin/gnutshell --wayland --display-server
 # Clear variables that pointed at the compositor once it is gone.
 ExecStopPost=-systemctl --user unset-environment GNOME_SETUP_DISPLAY WAYLAND_DISPLAY DISPLAY XAUTHORITY
 # A Wayland compositor cannot be restarted under running clients.

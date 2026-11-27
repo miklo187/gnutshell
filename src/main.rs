@@ -1,4 +1,4 @@
-//! gnative: a GNOME-style shell written in Rust on top of libmutter.
+//! gnutshell: a GNOME-style shell written in Rust on top of libmutter.
 //!
 //! This binary replaces `gnome-shell`: it creates a `MetaContext`, installs a
 //! Rust `MetaPlugin` subclass as the compositor plugin, and runs mutter's main
@@ -56,8 +56,8 @@ fn run() -> Result<(), String> {
     let mut argv_ptr = argv.as_mut_ptr();
 
     unsafe {
-        let ctx = ffi::meta_create_context(c"gnative".as_ptr());
-        ffi::meta_context_set_plugin_gtype(ctx, plugin::GnativePlugin::static_type().into_glib());
+        let ctx = ffi::meta_create_context(c"gnutshell".as_ptr());
+        ffi::meta_context_set_plugin_gtype(ctx, plugin::GnutshellPlugin::static_type().into_glib());
         ffi::meta_context_set_gnome_wm_keybindings(ctx, c"Mutter,GNOME Shell".as_ptr());
 
         let result = (|| {
@@ -67,7 +67,7 @@ fn run() -> Result<(), String> {
             check(ffi::meta_context_start(ctx, &mut err), err, "start")?;
             if ffi::meta_context_raise_rlimit_nofile(ctx, &mut err) == 0 {
                 let e: glib::Error = from_glib_full(err);
-                eprintln!("gnative: could not raise RLIMIT_NOFILE: {e}");
+                eprintln!("gnutshell: could not raise RLIMIT_NOFILE: {e}");
                 err = std::ptr::null_mut();
             }
 
@@ -89,7 +89,7 @@ fn run() -> Result<(), String> {
         // reached from Cogl context teardown). The process is exiting anyway;
         // the kernel reclaims DRM, sockets and memory, so skip the in-process
         // teardown unless explicitly requested for debugging.
-        if std::env::var_os("GNATIVE_FULL_TEARDOWN").is_some() {
+        if std::env::var_os("GNUTSHELL_FULL_TEARDOWN").is_some() {
             ffi::meta_context_destroy(ctx);
         }
         result
@@ -100,7 +100,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("gnative: {e}");
+            eprintln!("gnutshell: {e}");
             ExitCode::FAILURE
         }
     }

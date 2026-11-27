@@ -6,7 +6,7 @@
 //! password and the username prompt with the user name; anything else
 //! (e.g. a forced password change) fails the attempt instead of hanging.
 //!
-//! The PAM service is `gnative` (installed to /etc/pam.d by
+//! The PAM service is `gnutshell` (installed to /etc/pam.d by
 //! `dist/install.sh`, `auth include login`). If that file is missing the
 //! `login` service is used, never PAM's deny-all `other` fallback, so the
 //! screen can always be unlocked with the account password.
@@ -154,8 +154,8 @@ fn wipe(bytes: &mut [u8]) {
 }
 
 fn service() -> &'static CStr {
-    let ours = ["/etc/pam.d/gnative", "/usr/lib/pam.d/gnative"];
-    if ours.iter().any(|p| Path::new(p).is_file()) { c"gnative" } else { c"login" }
+    let ours = ["/etc/pam.d/gnutshell", "/usr/lib/pam.d/gnutshell"];
+    if ours.iter().any(|p| Path::new(p).is_file()) { c"gnutshell" } else { c"login" }
 }
 
 /// Check `password` for `user`. Blocking; call from a worker thread.
@@ -201,7 +201,7 @@ pub fn authenticate(user: &str, mut password: Vec<u8>) -> Result<(), String> {
     match error {
         None => Ok(()),
         Some(e) => {
-            glib::g_message!("gnative", "unlock failed: {e}");
+            glib::g_message!("gnutshell", "unlock failed: {e}");
             // A module's own message (e.g. "account locked") beats the generic one.
             Err(conv.messages.pop().unwrap_or_else(|| "Sorry, that didn't work. Please try again.".into()))
         }
@@ -213,9 +213,9 @@ pub fn authenticate_async(user: String, password: Vec<u8>, done: impl FnOnce(Res
     // Debug builds: test the flow against another (e.g. nonexistent) user,
     // so failed attempts never count against the real account.
     #[cfg(debug_assertions)]
-    let user = std::env::var("GNATIVE_DEBUG_PAM_USER").unwrap_or(user);
+    let user = std::env::var("GNUTSHELL_DEBUG_PAM_USER").unwrap_or(user);
     std::thread::Builder::new()
-        .name("gnative-pam".into())
+        .name("gnutshell-pam".into())
         .spawn(move || {
             let result = authenticate(&user, password);
             glib::MainContext::default().invoke(move || done(result));

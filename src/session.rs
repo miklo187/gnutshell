@@ -3,9 +3,9 @@
 //!
 //! Suspend acts at once; the others ask for confirmation first. Power actions
 //! go to systemd-logind (`org.freedesktop.login1.Manager`) with interactive
-//! authorization, so polkit can ask for a password through gnative's own
+//! authorization, so polkit can ask for a password through gnutshell's own
 //! agent when needed (e.g. powering off while other users are logged in).
-//! Log Out terminates gnative, which ends the session.
+//! Log Out terminates gnutshell, which ends the session.
 
 use crate::ffi::{self, ClutterActor, MetaDisplay};
 use crate::icons;
@@ -481,7 +481,7 @@ impl SessionMenu {
     }
 
     fn perform(&self, action: Action) {
-        glib::g_message!("gnative", "session action: {action:?}");
+        glib::g_message!("gnutshell", "session action: {action:?}");
         if action == Action::Lock {
             crate::lockscreen::lock_now();
             return;
@@ -491,7 +491,7 @@ impl SessionMenu {
             return;
         };
         let Some(bus) = self.state.borrow().bus.clone() else {
-            glib::g_warning!("gnative", "{method}: no connection to the system bus");
+            glib::g_warning!("gnutshell", "{method}: no connection to the system bus");
             return;
         };
         bus.call(
@@ -506,14 +506,14 @@ impl SessionMenu {
             gio::Cancellable::NONE,
             move |result| {
                 if let Err(e) = result {
-                    glib::g_warning!("gnative", "logind {method} failed: {e}");
+                    glib::g_warning!("gnutshell", "logind {method} failed: {e}");
                 }
             },
         );
     }
 
     /// Inside gnome-session, ask it to end the session (it stops the session
-    /// services in order). Otherwise, or if that fails, just end gnative.
+    /// services in order). Otherwise, or if that fails, just end gnutshell.
     fn log_out(&self) {
         let display = self.display;
         let terminate = move || unsafe {
@@ -529,7 +529,7 @@ impl SessionMenu {
             "org.gnome.SessionManager",
             "Logout",
             // 2 = forced: no further dialog, inhibitors ignored. The user
-            // already confirmed in gnative's own dialog.
+            // already confirmed in gnutshell's own dialog.
             Some(&(2u32,).to_variant()),
             None,
             gio::DBusCallFlags::NO_AUTO_START,
@@ -537,7 +537,7 @@ impl SessionMenu {
             gio::Cancellable::NONE,
             move |result| {
                 if let Err(e) = result {
-                    glib::g_debug!("gnative", "gnome-session Logout unavailable ({e}); exiting");
+                    glib::g_debug!("gnutshell", "gnome-session Logout unavailable ({e}); exiting");
                     terminate();
                 }
             },
@@ -551,7 +551,7 @@ impl SessionMenu {
             let bus = match result {
                 Ok(bus) => bus,
                 Err(e) => {
-                    glib::g_warning!("gnative", "session menu: no system bus: {e}");
+                    glib::g_warning!("gnutshell", "session menu: no system bus: {e}");
                     return;
                 }
             };
@@ -574,11 +574,11 @@ impl SessionMenu {
                         let answer = match result {
                             Ok(v) => v.get::<(String,)>().map(|(s,)| s).unwrap_or_default(),
                             Err(e) => {
-                                glib::g_warning!("gnative", "logind {query} failed: {e}");
+                                glib::g_warning!("gnutshell", "logind {query} failed: {e}");
                                 return;
                             }
                         };
-                        glib::g_debug!("gnative", "logind {query}: {answer}");
+                        glib::g_debug!("gnutshell", "logind {query}: {answer}");
                         with(&weak, |m| {
                             m.state.borrow_mut().available[action as usize] = is_available(&answer);
                         });
@@ -594,7 +594,7 @@ impl SessionMenu {
 /// .desktop entry says `X-GDM-SessionRegisters=true` and never registers
 /// is treated by GDM as failed. Outside GDM the calls just fail quietly.
 pub fn register_with_gdm(method: &'static str) {
-    glib::g_message!("gnative", "{method} with GDM");
+    glib::g_message!("gnutshell", "{method} with GDM");
     gio::bus_get(gio::BusType::System, gio::Cancellable::NONE, move |bus| {
         let Ok(bus) = bus else { return };
         bus.call(
@@ -609,7 +609,7 @@ pub fn register_with_gdm(method: &'static str) {
             gio::Cancellable::NONE,
             move |result| {
                 if let Err(e) = result {
-                    glib::g_debug!("gnative", "GDM {method} failed: {e}");
+                    glib::g_debug!("gnutshell", "GDM {method} failed: {e}");
                 }
             },
         );

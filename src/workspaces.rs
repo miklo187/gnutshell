@@ -5,7 +5,7 @@
 //! mutter handles workspaces themselves and the keybindings
 //! (Super+PageUp/PageDown, Ctrl+Alt+arrows, move-to-workspace, …). With
 //! dynamic workspaces it relies on the shell to add and remove them; like
-//! gnome-shell, gnative keeps exactly one empty workspace at the end (and at
+//! gnome-shell, gnutshell keeps exactly one empty workspace at the end (and at
 //! least two in total), removes other empty ones, and never removes the
 //! active one.
 

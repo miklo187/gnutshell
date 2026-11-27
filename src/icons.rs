@@ -76,7 +76,7 @@ pub fn symbolic(
 pub fn watch_theme_changes() {
     let Some(settings) = interface_settings() else { return };
     settings.connect_changed(Some("icon-theme"), |_, _| {
-        glib::g_debug!("gnative", "icon theme changed, clearing icon cache");
+        glib::g_debug!("gnutshell", "icon theme changed, clearing icon cache");
         CACHE.with_borrow_mut(|c| *c = Cache::default());
     });
     // The handler lives as long as the settings object: keep it for good.
@@ -158,12 +158,12 @@ fn load_file(path: &Path, px: i32, stage: *mut ClutterActor) -> Option<glib::Obj
         _ => None,
     };
     let Some(surface) = surface else {
-        glib::g_debug!("gnative", "could not load icon {}", path.display());
+        glib::g_debug!("gnutshell", "could not load icon {}", path.display());
         return None;
     };
     let content = unsafe { upload(surface.0, stage) };
     if content.is_none() {
-        glib::g_warning!("gnative", "could not upload icon {}", path.display());
+        glib::g_warning!("gnutshell", "could not upload icon {}", path.display());
     }
     content
 }

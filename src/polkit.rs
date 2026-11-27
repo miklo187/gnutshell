@@ -1,12 +1,12 @@
 //! Polkit authentication agent: the "Authentication Required" password dialog.
 //!
-//! `GnativeAgentListener` subclasses libpolkit-agent-1's `PolkitAgentListener`.
+//! `GnutshellAgentListener` subclasses libpolkit-agent-1's `PolkitAgentListener`.
 //! polkitd calls `initiate_authentication`; we show a modal Clutter dialog and
 //! drive a `PolkitAgentSession`, which runs the setuid PAM helper. The password
-//! goes from the entry straight to the helper; it is never stored by gnative.
+//! goes from the entry straight to the helper; it is never stored by gnutshell.
 //!
-//! The agent registers for the login session of the gnative process. When
-//! `GNATIVE_POLKIT_PID=<pid>` is set it registers for that single process
+//! The agent registers for the login session of the gnutshell process. When
+//! `GNUTSHELL_POLKIT_PID=<pid>` is set it registers for that single process
 //! instead (like `pkttyagent --process`), which lets it run nested next to
 //! gnome-shell, whose agent already owns the session.
 
@@ -20,7 +20,7 @@ use std::collections::VecDeque;
 use std::ffi::{c_char, CStr, CString};
 use std::rc::{Rc, Weak};
 
-const OBJECT_PATH: &CStr = c"/org/gnome/gnative/AuthenticationAgent";
+const OBJECT_PATH: &CStr = c"/org/gnome/gnutshell/AuthenticationAgent";
 
 const DIALOG_WIDTH: f32 = 460.0;
 const PADDING: f32 = 24.0;
@@ -163,22 +163,22 @@ mod imp {
     use super::*;
 
     #[derive(Default)]
-    pub struct GnativeAgentListener {
+    pub struct GnutshellAgentListener {
         pub(super) dialog: RefCell<Option<Rc<AuthDialog>>>,
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for GnativeAgentListener {
-        const NAME: &'static str = "GnativeAgentListener";
-        type Type = super::GnativeAgentListener;
+    impl ObjectSubclass for GnutshellAgentListener {
+        const NAME: &'static str = "GnutshellAgentListener";
+        type Type = super::GnutshellAgentListener;
         type ParentType = super::AgentListener;
     }
 
-    impl ObjectImpl for GnativeAgentListener {}
+    impl ObjectImpl for GnutshellAgentListener {}
 
-    impl AgentListenerImpl for GnativeAgentListener {
+    impl AgentListenerImpl for GnutshellAgentListener {
         fn initiate_authentication(&self, request: Request) {
-            glib::g_message!("gnative", "polkit: authentication requested for {}", request.action_id);
+            glib::g_message!("gnutshell", "polkit: authentication requested for {}", request.action_id);
             let dialog = self.dialog.borrow().clone();
             match dialog {
                 Some(d) => d.submit(request),
@@ -189,24 +189,24 @@ mod imp {
 }
 
 glib::wrapper! {
-    pub struct GnativeAgentListener(ObjectSubclass<imp::GnativeAgentListener>) @extends AgentListener;
+    pub struct GnutshellAgentListener(ObjectSubclass<imp::GnutshellAgentListener>) @extends AgentListener;
 }
 
 /// A registered agent. Dropping it unregisters from polkitd.
 pub struct Agent {
-    listener: GnativeAgentListener,
+    listener: GnutshellAgentListener,
     handle: glib_sys::gpointer,
 }
 
 impl Agent {
     pub fn register(display: *mut MetaDisplay, stage: *mut ClutterActor) -> Option<Agent> {
-        let listener: GnativeAgentListener = glib::Object::new();
+        let listener: GnutshellAgentListener = glib::Object::new();
         let dialog = AuthDialog::new(display, stage);
         *listener.imp().dialog.borrow_mut() = Some(dialog);
 
         unsafe {
             let mut err = std::ptr::null_mut();
-            let (subject, what) = match std::env::var("GNATIVE_POLKIT_PID").ok().and_then(|p| p.parse().ok()) {
+            let (subject, what) = match std::env::var("GNUTSHELL_POLKIT_PID").ok().and_then(|p| p.parse().ok()) {
                 Some(pid) => (
                     ffi::polkit_unix_process_new_for_owner(pid, 0, ffi::getuid() as i32),
                     format!("process {pid}"),
@@ -217,7 +217,7 @@ impl Agent {
                         std::ptr::null_mut(),
                         &mut err,
                     );
-                    // Under gnome-session, gnative is a systemd user service,
+                    // Under gnome-session, gnutshell is a systemd user service,
                     // outside the login session's process scope. gnome-session
                     // exports the session id, like gnome-shell relies on.
                     match std::env::var("XDG_SESSION_ID").ok().filter(|_| subject.is_null()) {
@@ -232,7 +232,7 @@ impl Agent {
             };
             if subject.is_null() {
                 let e: glib::Error = from_glib_full(err);
-                glib::g_warning!("gnative", "polkit: no subject to register for: {e}");
+                glib::g_warning!("gnutshell", "polkit: no subject to register for: {e}");
                 if let Some(d) = listener.imp().dialog.borrow_mut().take() {
                     d.destroy();
                 }
@@ -251,13 +251,13 @@ impl Agent {
 
             if handle.is_null() {
                 let e: glib::Error = from_glib_full(err);
-                glib::g_warning!("gnative", "polkit: agent not registered for {what}: {e}");
+                glib::g_warning!("gnutshell", "polkit: agent not registered for {what}: {e}");
                 if let Some(d) = listener.imp().dialog.borrow_mut().take() {
                     d.destroy();
                 }
                 return None;
             }
-            glib::g_message!("gnative", "polkit: authentication agent registered for {what}");
+            glib::g_message!("gnutshell", "polkit: authentication agent registered for {what}");
             Some(Agent { listener, handle })
         }
     }
@@ -613,11 +613,11 @@ impl AuthDialog {
         }
         match result {
             Ok(()) => {
-                glib::g_message!("gnative", "polkit: authorized {}", active.request.action_id);
+                glib::g_message!("gnutshell", "polkit: authorized {}", active.request.action_id);
                 active.request.task.succeed();
             }
             Err((code, msg)) => {
-                glib::g_message!("gnative", "polkit: {} not authorized: {msg}", active.request.action_id);
+                glib::g_message!("gnutshell", "polkit: {} not authorized: {msg}", active.request.action_id);
                 active.request.task.fail(code, msg);
             }
         }

@@ -1,4 +1,4 @@
-//! `MetaPlugin` subclassing support plus the gnative shell plugin itself.
+//! `MetaPlugin` subclassing support plus the gnutshell shell plugin itself.
 
 use crate::ffi::{self, ClutterActor, CoglColor, MetaDisplay, MtkRectangle};
 use crate::launcher::Launcher;
@@ -117,7 +117,7 @@ unsafe extern "C" fn vfunc_kill_switch_workspace<T: MetaPluginImpl>(p: *mut ffi:
 }
 
 // =============================================================================
-// The gnative shell
+// The gnutshell shell
 // =============================================================================
 
 const PANEL_HEIGHT: i32 = 32;
@@ -129,7 +129,7 @@ const CLOCK_FORMAT: &str = "%a %e %b  %H:%M";
 
 thread_local! {
     /// The running plugin instance, so `main` can tear the shell down.
-    static INSTANCE: RefCell<glib::WeakRef<GnativePlugin>> = RefCell::default();
+    static INSTANCE: RefCell<glib::WeakRef<GnutshellPlugin>> = RefCell::default();
 }
 
 /// Complete pending window effects and destroy the shell actors.
@@ -167,7 +167,7 @@ mod imp {
     use super::*;
 
     #[derive(Default)]
-    pub struct GnativePlugin {
+    pub struct GnutshellPlugin {
         pub(super) shell: RefCell<Option<Shell>>,
         pub(super) launcher: RefCell<Option<Rc<Launcher>>>,
         pub(super) switcher: RefCell<Option<Rc<Switcher>>>,
@@ -184,15 +184,15 @@ mod imp {
     }
 
     #[glib::object_subclass]
-    impl ObjectSubclass for GnativePlugin {
-        const NAME: &'static str = "GnativePlugin";
-        type Type = super::GnativePlugin;
+    impl ObjectSubclass for GnutshellPlugin {
+        const NAME: &'static str = "GnutshellPlugin";
+        type Type = super::GnutshellPlugin;
         type ParentType = super::MetaPlugin;
     }
 
-    impl ObjectImpl for GnativePlugin {}
+    impl ObjectImpl for GnutshellPlugin {}
 
-    impl MetaPluginImpl for GnativePlugin {
+    impl MetaPluginImpl for GnutshellPlugin {
         fn start(&self) {
             self.build_shell();
         }
@@ -247,7 +247,7 @@ mod imp {
             };
             let blocked = !crate::lockscreen::allows_keybinding(&name);
             if blocked {
-                glib::g_debug!("gnative", "locked: blocked keybinding {name}");
+                glib::g_debug!("gnutshell", "locked: blocked keybinding {name}");
             }
             blocked
         }
@@ -255,10 +255,10 @@ mod imp {
 }
 
 glib::wrapper! {
-    pub struct GnativePlugin(ObjectSubclass<imp::GnativePlugin>) @extends MetaPlugin;
+    pub struct GnutshellPlugin(ObjectSubclass<imp::GnutshellPlugin>) @extends MetaPlugin;
 }
 
-impl imp::GnativePlugin {
+impl imp::GnutshellPlugin {
     fn plugin_ptr(&self) -> *mut ffi::MetaPlugin {
         self.obj().upcast_ref::<MetaPlugin>().as_ptr()
     }
@@ -370,11 +370,11 @@ impl imp::GnativePlugin {
         }
     }
 
-    /// Debug builds: `GNATIVE_DEBUG_SESSION_MENU=<ms>` opens the session menu
-    /// after `<ms>` milliseconds (drive it further with `GNATIVE_DEBUG_KEYS`).
+    /// Debug builds: `GNUTSHELL_DEBUG_SESSION_MENU=<ms>` opens the session menu
+    /// after `<ms>` milliseconds (drive it further with `GNUTSHELL_DEBUG_KEYS`).
     #[cfg(debug_assertions)]
     fn debug_session_hook(&self) {
-        let Some(delay) = std::env::var("GNATIVE_DEBUG_SESSION_MENU").ok().and_then(|v| v.parse().ok()) else {
+        let Some(delay) = std::env::var("GNUTSHELL_DEBUG_SESSION_MENU").ok().and_then(|v| v.parse().ok()) else {
             return;
         };
         let weak = self.obj().downgrade();
@@ -387,12 +387,12 @@ impl imp::GnativePlugin {
         });
     }
 
-    /// Debug builds: `GNATIVE_DEBUG_SCREENSHOT=<ms>,<ms>,...:<prefix>` paints the
+    /// Debug builds: `GNUTSHELL_DEBUG_SCREENSHOT=<ms>,<ms>,...:<prefix>` paints the
     /// primary monitor at each time to `<prefix>-<ms>-<W>x<H>.bgra` (raw
     /// premultiplied BGRA). Convert: `magick -size WxH -depth 8 BGRA:f.bgra f.png`.
     #[cfg(debug_assertions)]
     fn debug_screenshot_hook(&self) {
-        let Ok(spec) = std::env::var("GNATIVE_DEBUG_SCREENSHOT") else { return };
+        let Ok(spec) = std::env::var("GNUTSHELL_DEBUG_SCREENSHOT") else { return };
         let Some((times, prefix)) = spec.split_once(':') else { return };
         let display = self.obj().upcast_ref::<MetaPlugin>().display();
         for ms in times.split(',').filter_map(|t| t.parse::<u64>().ok()) {
@@ -410,18 +410,18 @@ impl imp::GnativePlugin {
                 );
                 if ok == 0 {
                     let e: glib::Error = from_glib_full(err);
-                    glib::g_warning!("gnative", "screenshot failed: {e}");
+                    glib::g_warning!("gnutshell", "screenshot failed: {e}");
                     return;
                 }
                 // Dump window actor state alongside the screenshot.
                 let compositor = ffi::meta_display_get_compositor(display);
                 let wg = ffi::meta_compositor_get_window_group(compositor);
-                glib::g_message!("gnative", "debug: window_group visible={} mapped={} opacity={}",
+                glib::g_message!("gnutshell", "debug: window_group visible={} mapped={} opacity={}",
                     ffi::clutter_actor_is_visible(wg), ffi::clutter_actor_is_mapped(wg), ffi::clutter_actor_get_paint_opacity(wg));
                 let mut node = ffi::meta_compositor_get_window_actors(compositor);
                 while !node.is_null() {
                     let a = (*node).data as *mut ClutterActor;
-                    glib::g_message!("gnative",
+                    glib::g_message!("gnutshell",
                         "debug: actor {} visible={} mapped={} opacity={} paint_opacity={} parent_is_wg={}",
                         window_desc(ffi::meta_window_actor_get_meta_window(a)),
                         ffi::clutter_actor_is_visible(a), ffi::clutter_actor_is_mapped(a),
@@ -431,14 +431,14 @@ impl imp::GnativePlugin {
                 }
                 let path = format!("{prefix}-{ms}-{}x{}.bgra", r.width, r.height);
                 match std::fs::write(&path, &buf) {
-                    Ok(()) => glib::g_message!("gnative", "debug: screenshot {path}"),
-                    Err(e) => glib::g_warning!("gnative", "screenshot write {path}: {e}"),
+                    Ok(()) => glib::g_message!("gnutshell", "debug: screenshot {path}"),
+                    Err(e) => glib::g_warning!("gnutshell", "screenshot write {path}: {e}"),
                 }
             });
         }
     }
 
-    /// Debug builds: `GNATIVE_DEBUG_KEYS=<ms>:<keys>` types `<keys>` through a
+    /// Debug builds: `GNUTSHELL_DEBUG_KEYS=<ms>:<keys>` types `<keys>` through a
     /// virtual keyboard after `<ms>` milliseconds, 80 ms per key. Tokens are
     /// separated by spaces: characters to type, one of `Super`, `Return`,
     /// `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
@@ -448,7 +448,7 @@ impl imp::GnativePlugin {
     /// input path headless.
     #[cfg(debug_assertions)]
     fn debug_keys_hook(&self) {
-        let Ok(spec) = std::env::var("GNATIVE_DEBUG_KEYS") else { return };
+        let Ok(spec) = std::env::var("GNUTSHELL_DEBUG_KEYS") else { return };
         let Some((delay, keys)) = spec.split_once(':') else { return };
         let Ok(delay) = delay.parse::<u64>() else { return };
 
@@ -533,7 +533,7 @@ impl imp::GnativePlugin {
                         }
                     }
                 }
-                glib::g_debug!("gnative", "debug: typed step, focus = {}", window_desc(unsafe {
+                glib::g_debug!("gnutshell", "debug: typed step, focus = {}", window_desc(unsafe {
                     ffi::meta_display_get_focus_window(display)
                 }));
                 glib::ControlFlow::Continue
@@ -541,23 +541,23 @@ impl imp::GnativePlugin {
         });
     }
 
-    /// Debug builds: `GNATIVE_DEBUG_SWITCH=<ms>` runs Alt+Tab programmatically
+    /// Debug builds: `GNUTSHELL_DEBUG_SWITCH=<ms>` runs Alt+Tab programmatically
     /// after `<ms>` milliseconds (start, show popup, release) and logs focus.
     #[cfg(debug_assertions)]
     fn debug_switch_hook(&self) {
-        let Some(delay) = std::env::var("GNATIVE_DEBUG_SWITCH").ok().and_then(|v| v.parse().ok()) else {
+        let Some(delay) = std::env::var("GNUTSHELL_DEBUG_SWITCH").ok().and_then(|v| v.parse().ok()) else {
             return;
         };
         let Some(switcher) = self.switcher.borrow().clone() else { return };
         let display = self.obj().upcast_ref::<MetaPlugin>().display();
         glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
-            glib::g_message!("gnative", "debug: focus before: {}", focus_title(display));
+            glib::g_message!("gnutshell", "debug: focus before: {}", focus_title(display));
             switcher.start(false);
-            glib::g_message!("gnative", "debug: switcher active={}", switcher.is_active());
+            glib::g_message!("gnutshell", "debug: switcher active={}", switcher.is_active());
             glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
                 switcher.finish();
                 glib::g_message!(
-                    "gnative",
+                    "gnutshell",
                     "debug: switcher active={} focus after: {}",
                     switcher.is_active(),
                     focus_title(display)
@@ -566,20 +566,20 @@ impl imp::GnativePlugin {
         });
     }
 
-    /// Debug builds: `GNATIVE_DEBUG_LAUNCH=<query>` opens the launcher shortly
+    /// Debug builds: `GNUTSHELL_DEBUG_LAUNCH=<query>` opens the launcher shortly
     /// after startup, types `<query>` and launches the top match. Exercises the
     /// launcher end-to-end without real input devices (e.g. `--headless`).
     #[cfg(debug_assertions)]
     fn debug_launch_hook(&self) {
-        let Ok(query) = std::env::var("GNATIVE_DEBUG_LAUNCH") else { return };
+        let Ok(query) = std::env::var("GNUTSHELL_DEBUG_LAUNCH") else { return };
         let Some(launcher) = self.launcher.borrow().clone() else { return };
         glib::timeout_add_local_once(std::time::Duration::from_millis(1000), move || {
             launcher.show();
             launcher.set_query(&query);
-            glib::g_message!("gnative", "debug: launcher visible={} query={query:?}", launcher.is_visible());
+            glib::g_message!("gnutshell", "debug: launcher visible={} query={query:?}", launcher.is_visible());
             glib::timeout_add_local_once(std::time::Duration::from_millis(500), move || {
                 launcher.launch_selected();
-                glib::g_message!("gnative", "debug: launcher visible={}", launcher.is_visible());
+                glib::g_message!("gnutshell", "debug: launcher visible={}", launcher.is_visible());
             });
         });
     }
@@ -591,18 +591,18 @@ impl imp::GnativePlugin {
         let monitor_manager = unsafe { gobj(ffi::meta_backend_get_monitor_manager(backend)) };
         let workspace_manager = unsafe { gobj(ffi::meta_display_get_workspace_manager(display)) };
 
-        // Diagnostics: G_MESSAGES_DEBUG=gnative
+        // Diagnostics: G_MESSAGES_DEBUG=gnutshell
         for sig in ["window-created", "window-demands-attention", "window-marked-urgent"] {
             display_obj.connect_local(sig, false, move |args| {
                 let w = args.get(1).and_then(|v| v.get::<glib::Object>().ok());
                 let desc = w.map(|w| window_desc(w.as_ptr() as *mut ffi::MetaWindow)).unwrap_or_default();
-                glib::g_debug!("gnative", "{sig}: {desc}");
+                glib::g_debug!("gnutshell", "{sig}: {desc}");
                 None
             });
         }
 
         display_obj.connect_notify_local(Some("focus-window"), move |_, _| {
-            glib::g_debug!("gnative", "focus -> {}", unsafe {
+            glib::g_debug!("gnutshell", "focus -> {}", unsafe {
                 window_desc(ffi::meta_display_get_focus_window(display))
             });
         });
@@ -618,15 +618,15 @@ impl imp::GnativePlugin {
         workspace_manager.connect_local("workspace-added", false, relayout.clone());
         display_obj.connect_local("in-fullscreen-changed", false, relayout);
 
-        // Super key: toggle the built-in launcher, or run $GNATIVE_LAUNCHER.
+        // Super key: toggle the built-in launcher, or run $GNUTSHELL_LAUNCHER.
         let weak = self.obj().downgrade();
         display_obj.connect_local("overlay-key", false, move |_| {
             if crate::lockscreen::is_locked() {
                 return None;
             }
-            if let Ok(cmd) = std::env::var("GNATIVE_LAUNCHER") {
+            if let Ok(cmd) = std::env::var("GNUTSHELL_LAUNCHER") {
                 if let Err(e) = glib::spawn_command_line_async(cmd.as_str()) {
-                    glib::g_warning!("gnative", "failed to spawn launcher '{cmd}': {e}");
+                    glib::g_warning!("gnutshell", "failed to spawn launcher '{cmd}': {e}");
                 }
             } else if let Some(p) = weak.upgrade() {
                 let launcher = p.imp().launcher.borrow().clone();
@@ -767,7 +767,7 @@ impl imp::GnativePlugin {
 
     fn animate(&self, actor: *mut ClutterActor, effect: Effect) {
         let key = actor as usize;
-        glib::g_debug!("gnative", "effect {effect:?}: {}", unsafe {
+        glib::g_debug!("gnutshell", "effect {effect:?}: {}", unsafe {
             window_desc(ffi::meta_window_actor_get_meta_window(actor))
         });
 

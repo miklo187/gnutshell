@@ -275,8 +275,8 @@ impl Notifications {
                     this.export(connection);
                 }
             },
-            |_, name| glib::g_debug!("gnative", "acquired {name}"),
-            |_, name| glib::g_warning!("gnative", "could not own {name} (is another notification daemon running?)"),
+            |_, name| glib::g_debug!("gnutshell", "acquired {name}"),
+            |_, name| glib::g_warning!("gnutshell", "could not own {name} (is another notification daemon running?)"),
         );
         self.state.borrow_mut().owner = Some(owner);
     }
@@ -297,7 +297,7 @@ impl Notifications {
         let mut state = self.state.borrow_mut();
         match registration {
             Ok(id) => state.registration = Some(id),
-            Err(e) => glib::g_warning!("gnative", "could not export {OBJECT_PATH}: {e}"),
+            Err(e) => glib::g_warning!("gnutshell", "could not export {OBJECT_PATH}: {e}"),
         }
         state.connection = Some(connection);
     }
@@ -315,7 +315,7 @@ impl Notifications {
                 invocation.return_value(Some(&(caps,).to_variant()));
             }
             "GetServerInformation" => {
-                let info = ("gnative", "gnative", env!("CARGO_PKG_VERSION"), "1.2");
+                let info = ("gnutshell", "gnutshell", env!("CARGO_PKG_VERSION"), "1.2");
                 invocation.return_value(Some(&info.to_variant()));
             }
             "Notify" => {
@@ -336,7 +336,7 @@ impl Notifications {
             }
             _ => invocation.return_dbus_error(
                 "org.freedesktop.DBus.Error.UnknownMethod",
-                &format!("{method} is not implemented by gnative"),
+                &format!("{method} is not implemented by gnutshell"),
             ),
         }
     }
@@ -357,19 +357,19 @@ impl Notifications {
     fn emit(&self, destination: &str, signal: &str, body: &glib::Variant) {
         let Some(connection) = self.state.borrow().connection.clone() else { return };
         if let Err(e) = connection.emit_signal(Some(destination), OBJECT_PATH, INTERFACE, signal, Some(body)) {
-            glib::g_debug!("gnative", "could not emit {signal}: {e}");
+            glib::g_debug!("gnutshell", "could not emit {signal}: {e}");
         }
     }
 
     fn emit_closed(&self, n: &Notification, reason: Reason) {
-        glib::g_debug!("gnative", "notification {} closed: {reason:?}", n.id);
+        glib::g_debug!("gnutshell", "notification {} closed: {reason:?}", n.id);
         self.emit(&n.sender, "NotificationClosed", &(n.id, reason as u32).to_variant());
     }
 
     // ------------------------------------------------------------------ queue
 
     fn add(self: &Rc<Self>, n: Notification) {
-        glib::g_debug!("gnative", "notification {} from {:?}", n.id, n.app_name);
+        glib::g_debug!("gnutshell", "notification {} from {:?}", n.id, n.app_name);
         let banners = self.settings.as_ref().is_none_or(|s| s.boolean("show-banners"));
         if !banners && !n.critical {
             // It may replace one that is still around: drop that silently,
@@ -702,7 +702,7 @@ fn to_bgra_premultiplied(image: &Image) -> Option<Vec<u8>> {
 }
 
 /// Remove the specification's body markup (`<b>`, `<i>`, `<u>`, `<a>`,
-/// `<img>`) and decode entities. gnative doesn't advertise `body-markup`,
+/// `<img>`) and decode entities. gnutshell doesn't advertise `body-markup`,
 /// but many apps send it anyway. Other `<` characters are kept.
 fn plain_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

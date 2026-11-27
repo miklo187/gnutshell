@@ -104,7 +104,7 @@ impl Switcher {
             };
             if ok == 0 {
                 unsafe { drop_weak(data) };
-                glib::g_warning!("gnative", "could not take over keybinding {name:?}");
+                glib::g_warning!("gnutshell", "could not take over keybinding {name:?}");
             }
         }
     }

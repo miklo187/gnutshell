@@ -1,7 +1,7 @@
 //! Keyboard layouts from `org.gnome.desktop.input-sources`.
 //!
 //! In GNOME, gnome-shell (not gnome-settings-daemon) turns the configured
-//! input sources into an XKB keymap. gnative does the same: all `xkb` sources
+//! input sources into an XKB keymap. gnutshell does the same: all `xkb` sources
 //! (up to 4) go into one keymap, and the active one is a layout index.
 //! Super+Space (`switch-input-source`) cycles; the most recently used source
 //! is stored in `mru-sources`, like gnome-shell does, so it survives restarts.
@@ -84,7 +84,7 @@ impl InputSources {
             .and_then(|src| src.lookup(SCHEMA, true))
             .is_some();
         if !has_schema {
-            glib::g_warning!("gnative", "{SCHEMA} not installed; keeping the default keymap");
+            glib::g_warning!("gnutshell", "{SCHEMA} not installed; keeping the default keymap");
             return None;
         }
         let this = unsafe {
@@ -159,7 +159,7 @@ impl InputSources {
             };
             if action == 0 {
                 unsafe { drop_weak(data) };
-                glib::g_warning!("gnative", "could not add keybinding {name:?}");
+                glib::g_warning!("gnutshell", "could not add keybinding {name:?}");
             }
         }
     }
@@ -180,7 +180,7 @@ impl InputSources {
         // reloads to the same state, which `apply` recognizes as a no-op.
         let mru = bump_mru(&mru, &id);
         if let Err(e) = self.settings.set_value("mru-sources", &mru.to_variant()) {
-            glib::g_warning!("gnative", "could not store mru-sources: {e}");
+            glib::g_warning!("gnutshell", "could not store mru-sources: {e}");
         }
     }
 
@@ -264,7 +264,7 @@ impl InputSources {
             state.desc
         };
         glib::g_debug!(
-            "gnative",
+            "gnutshell",
             "keymap: layouts={} variants={} options={} index={current}",
             rules.0,
             rules.1,
@@ -316,7 +316,7 @@ unsafe extern "C" fn on_keymap_set(
     let ok = unsafe { ffi::meta_backend_set_keymap_finish(source as *mut ffi::MetaBackend, result, &mut err) };
     if ok == 0 {
         let e: glib::Error = unsafe { glib::translate::from_glib_full(err) };
-        glib::g_warning!("gnative", "could not set keymap: {e}");
+        glib::g_warning!("gnutshell", "could not set keymap: {e}");
     }
 }
 

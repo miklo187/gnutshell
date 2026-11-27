@@ -1,8 +1,8 @@
 [Desktop Entry]
-Name=gnative
+Name=gnutshell
 Comment=GNOME-style shell written in Rust, on gnome-session
-Exec=/usr/bin/gnome-session --session=gnative
+Exec=/usr/bin/gnome-session --session=gnutshell
 TryExec=/usr/bin/gnome-session
 Type=Application
-DesktopNames=gnative;GNOME
+DesktopNames=gnutshell;GNOME
 X-GDM-SessionRegisters=true
