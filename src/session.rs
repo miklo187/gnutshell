@@ -1,16 +1,20 @@
 //! Session menu: a power button at the right end of the panel that opens
 //! Suspend / Restart / Power Off / Log Out.
 //!
-//! Suspend acts at once; the others ask for confirmation first. Power actions
+//! Lock and Suspend act at once. The others go through gnome-session, which
+//! has `end_session.rs` show a confirmation that names the apps blocking it.
+//! Without gnome-session they are confirmed here; then Restart and Power Off
 //! go to systemd-logind (`org.freedesktop.login1.Manager`) with interactive
 //! authorization, so polkit can ask for a password through gnutshell's own
-//! agent when needed (e.g. powering off while other users are logged in).
-//! Log Out terminates gnutshell, which ends the session.
+//! agent, and Log Out ends gnutshell. Suspend always goes to logind.
+
+mod end_session;
 
 use crate::ffi::{self, ClutterActor, MetaDisplay};
 use crate::icons;
 use crate::ui::{self, gobj};
 use gio::prelude::*;
+use end_session::Blocker;
 use std::cell::RefCell;
 use std::ffi::CStr;
 use std::rc::{Rc, Weak};
@@ -25,6 +29,10 @@ const SPACING: f32 = 12.0;
 const DIALOG_BUTTON_WIDTH: f32 = 120.0;
 const DIALOG_BUTTON_HEIGHT: f32 = 36.0;
 const TITLE_FONT: &CStr = c"Sans Bold 14";
+/// Dialog text when nothing blocks the action.
+const CONFIRM_BODY: &str = "Open apps will be closed. Unsaved work will be lost.";
+const BLOCKED_DIALOG_WIDTH: f32 = 520.0;
+const BLOCKED_BUTTON_WIDTH: f32 = 170.0;
 const HOVER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x20);
 
 const LOGIND_NAME: &str = "org.freedesktop.login1";
@@ -63,14 +71,13 @@ impl Action {
         }
     }
 
-    /// (title, body, confirm button) for actions that need confirmation.
-    fn confirmation(self) -> Option<(&'static str, &'static str, &'static str)> {
-        const BODY: &str = "Open apps will be closed. Unsaved work will be lost.";
+    /// (title, confirm button) for actions that need confirmation.
+    fn confirmation(self) -> Option<(&'static str, &'static str)> {
         match self {
             Action::Lock | Action::Suspend => None,
-            Action::Restart => Some(("Restart?", BODY, "Restart")),
-            Action::PowerOff => Some(("Power Off?", BODY, "Power Off")),
-            Action::LogOut => Some(("Log Out?", BODY, "Log Out")),
+            Action::Restart => Some(("Restart?", "Restart")),
+            Action::PowerOff => Some(("Power Off?", "Power Off")),
+            Action::LogOut => Some(("Log Out?", "Log Out")),
         }
     }
 
@@ -89,7 +96,7 @@ impl Action {
 enum Mode {
     Closed,
     Menu,
-    Confirm(Action),
+    Confirm { action: Action, blocked: bool },
 }
 
 pub struct SessionMenu {
@@ -117,6 +124,9 @@ struct State {
     /// Per action: does logind allow it? Log Out is always available.
     available: [bool; 5],
     bus: Option<gio::DBusConnection>,
+    session_bus: Option<gio::DBusConnection>,
+    registration: Option<gio::RegistrationId>,
+    request: Option<end_session::Request>,
 }
 
 impl SessionMenu {
@@ -177,12 +187,16 @@ impl SessionMenu {
                     selected: 0,
                     available: [true, false, false, false, true],
                     bus: None,
+                    session_bus: None,
+                    registration: None,
+                    request: None,
                 }),
             })
         };
         menu.connect_signals();
         menu.update_button_icon();
         menu.query_logind();
+        menu.export_end_session_dialog();
         menu
     }
 
@@ -263,6 +277,8 @@ impl SessionMenu {
     }
 
     pub fn close(&self) {
+        // Any way of closing an unanswered dialog is a cancel.
+        self.cancel_request();
         let grab = {
             let mut state = self.state.borrow_mut();
             state.mode = Mode::Closed;
@@ -282,6 +298,13 @@ impl SessionMenu {
 
     pub fn destroy(&self) {
         self.close();
+        let (bus, registration) = {
+            let mut state = self.state.borrow_mut();
+            (state.session_bus.take(), state.registration.take())
+        };
+        if let (Some(bus), Some(id)) = (bus, registration) {
+            let _ = bus.unregister_object(id);
+        }
         unsafe {
             ffi::clutter_actor_destroy(self.overlay);
             ffi::clutter_actor_destroy(self.button);
@@ -290,12 +313,11 @@ impl SessionMenu {
 
     /// Run `action`, asking for confirmation first where appropriate.
     pub fn choose(self: &Rc<Self>, action: Action) {
-        match action.confirmation() {
-            Some(text) => self.show_confirmation(action, text),
-            None => {
-                self.close();
-                self.perform(action);
-            }
+        self.close();
+        if action.confirmation().is_some() {
+            self.request_end_session(action);
+        } else {
+            self.perform(action);
         }
     }
 
@@ -324,9 +346,13 @@ impl SessionMenu {
                     self.choose(action);
                 }
             }
-            (Mode::Confirm(action), ui::KEY_RETURN | ui::KEY_KP_ENTER) => {
-                self.close();
-                self.perform(action);
+            // With apps in the way, Enter must not push past them.
+            (Mode::Confirm { action, blocked }, ui::KEY_RETURN | ui::KEY_KP_ENTER) => {
+                if blocked {
+                    self.close();
+                } else {
+                    self.confirm(action);
+                }
             }
             _ => return false,
         }
@@ -390,7 +416,17 @@ impl SessionMenu {
         self.state.borrow_mut().rows = rows;
     }
 
-    fn show_confirmation(self: &Rc<Self>, action: Action, (title, body, confirm): (&str, &str, &str)) {
+    /// The confirmation dialog. Called again while open, it is redrawn.
+    fn show_confirmation(self: &Rc<Self>, action: Action, blockers: &[Blocker]) {
+        let Some((title, confirm)) = action.confirmation() else { return };
+        let body = end_session::describe(blockers);
+        let blocked = !blockers.is_empty();
+        let confirm = if blocked { format!("{confirm} Anyway") } else { confirm.to_owned() };
+        let (dialog_width, button_width) = if blocked {
+            (BLOCKED_DIALOG_WIDTH, BLOCKED_BUTTON_WIDTH)
+        } else {
+            (DIALOG_WIDTH, DIALOG_BUTTON_WIDTH)
+        };
         self.state.borrow_mut().rows.clear();
         let needs_grab = self.state.borrow().grab.is_none();
         if needs_grab {
@@ -401,10 +437,10 @@ impl SessionMenu {
             ffi::clutter_actor_hide(self.menu);
             ffi::clutter_actor_destroy_all_children(self.dialog);
 
-            let width = DIALOG_WIDTH.min(ffi::clutter_actor_get_width(self.overlay) - 32.0);
+            let width = dialog_width.min(ffi::clutter_actor_get_width(self.overlay) - 32.0);
             let inner = width - 2.0 * PADDING;
             let mut y = PADDING;
-            for (font, text) in [(TITLE_FONT, title), (ui::BODY_FONT, body)] {
+            for (font, text) in [(TITLE_FONT, title), (ui::BODY_FONT, body.as_str())] {
                 let l = ui::label(font, text, &ui::TEXT_COLOR);
                 ffi::clutter_text_set_line_wrap(l as *mut ffi::ClutterText, 1);
                 ffi::clutter_actor_set_width(l, inner);
@@ -414,20 +450,17 @@ impl SessionMenu {
             }
             y += SPACING;
 
-            let ok = ui::button(confirm, DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT, &ui::DESTRUCTIVE_COLOR);
-            let cancel = ui::button("Cancel", DIALOG_BUTTON_WIDTH, DIALOG_BUTTON_HEIGHT, &ui::BUTTON_COLOR);
+            let ok = ui::button(&confirm, button_width, DIALOG_BUTTON_HEIGHT, &ui::DESTRUCTIVE_COLOR);
+            let cancel = ui::button("Cancel", button_width, DIALOG_BUTTON_HEIGHT, &ui::BUTTON_COLOR);
             ffi::clutter_actor_add_child(self.dialog, ok);
             ffi::clutter_actor_add_child(self.dialog, cancel);
-            ffi::clutter_actor_set_position(ok, width - PADDING - DIALOG_BUTTON_WIDTH, y);
-            ffi::clutter_actor_set_position(cancel, width - PADDING - 2.0 * DIALOG_BUTTON_WIDTH - SPACING, y);
+            ffi::clutter_actor_set_position(ok, width - PADDING - button_width, y);
+            ffi::clutter_actor_set_position(cancel, width - PADDING - 2.0 * button_width - SPACING, y);
             y += DIALOG_BUTTON_HEIGHT + PADDING;
 
             let weak = Rc::downgrade(self);
             gobj(ok).connect_local("button-press-event", false, move |_| {
-                with(&weak, |m| {
-                    m.close();
-                    m.perform(action);
-                });
+                with(&weak, |m| m.confirm(action));
                 Some(true.to_value())
             });
             let weak = Rc::downgrade(self);
@@ -447,9 +480,13 @@ impl SessionMenu {
             ffi::clutter_actor_set_background_color(self.overlay, &ui::DIM_COLOR);
             ffi::clutter_actor_show(self.dialog);
         }
-        self.state.borrow_mut().mode = Mode::Confirm(action);
+        self.state.borrow_mut().mode = Mode::Confirm { action, blocked };
+        // gnome-session can open the dialog over anything.
+        unsafe { ffi::clutter_actor_set_child_above_sibling(self.stage, self.overlay, std::ptr::null_mut()) };
         if needs_grab {
             self.grab();
+        } else {
+            unsafe { ffi::clutter_actor_grab_key_focus(self.overlay) };
         }
     }
 
@@ -487,7 +524,8 @@ impl SessionMenu {
             return;
         }
         let Some((method, _)) = action.logind() else {
-            self.log_out();
+            // Log Out without gnome-session: ending gnutshell is all it takes.
+            unsafe { ffi::meta_context_terminate(ffi::meta_display_get_context(self.display)) };
             return;
         };
         let Some(bus) = self.state.borrow().bus.clone() else {
@@ -507,38 +545,6 @@ impl SessionMenu {
             move |result| {
                 if let Err(e) = result {
                     glib::g_warning!("gnutshell", "logind {method} failed: {e}");
-                }
-            },
-        );
-    }
-
-    /// Inside gnome-session, ask it to end the session (it stops the session
-    /// services in order). Otherwise, or if that fails, just end gnutshell.
-    fn log_out(&self) {
-        let display = self.display;
-        let terminate = move || unsafe {
-            ffi::meta_context_terminate(ffi::meta_display_get_context(display))
-        };
-        let Ok(bus) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) else {
-            terminate();
-            return;
-        };
-        bus.call(
-            Some("org.gnome.SessionManager"),
-            "/org/gnome/SessionManager",
-            "org.gnome.SessionManager",
-            "Logout",
-            // 2 = forced: no further dialog, inhibitors ignored. The user
-            // already confirmed in gnutshell's own dialog.
-            Some(&(2u32,).to_variant()),
-            None,
-            gio::DBusCallFlags::NO_AUTO_START,
-            -1,
-            gio::Cancellable::NONE,
-            move |result| {
-                if let Err(e) = result {
-                    glib::g_debug!("gnutshell", "gnome-session Logout unavailable ({e}); exiting");
-                    terminate();
                 }
             },
         );

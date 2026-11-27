@@ -13,13 +13,20 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 - Top panel with a centered clock. The panel reserves screen space through workspace
   struts, so maximized windows stay below it. The panel hides when the primary monitor
   shows a fullscreen window.
-- Session menu: a power button at the right of the panel opens Suspend,
+- Session menu: a power button at the right of the panel opens Lock, Suspend,
   Restart, Power Off and Log Out. Mouse or keyboard (Up/Down, Enter,
-  Escape). Everything except Suspend asks for confirmation first. Power
-  actions go to systemd-logind with interactive authorization, so polkit can
-  ask for a password through gnutshell's agent (for example when other users
-  are logged in). Log Out ends gnutshell and with it the session. Actions that
-  logind reports as unavailable are hidden.
+  Escape). Lock and Suspend act at once; actions that logind reports as
+  unavailable are hidden. Restart, Power Off and Log Out go through
+  gnome-session, which asks running apps first and then has gnutshell show a
+  confirmation (`org.gnome.SessionManager.EndSessionDialog`). It names the
+  apps that block logging out and why. With blockers, the button reads
+  "… Anyway" and Enter cancels. `gnome-session-quit` gets the same dialog.
+  There is no countdown: nothing happens until you answer. As in gnome-shell,
+  setting `org.gnome.SessionManager logout-prompt` to `false` skips the dialog
+  when nothing blocks. Without gnome-session, gnutshell confirms by itself,
+  sends Restart and Power Off to systemd-logind and ends itself for Log Out.
+  logind can ask for a password through gnutshell's polkit agent (for example
+  when other users are logged in).
 - Notifications: gnutshell is the `org.freedesktop.Notifications` service. A
   banner below the panel shows the icon or image, app name, title, up to three
   lines of text and up to three action buttons. Click the banner for the default
@@ -174,7 +181,8 @@ saves raw BGRA screenshots at those times.
 `GNUTSHELL_DEBUG_PAM_USER=<user>` checks lock screen passwords against another
 (e.g. nonexistent) user, so test attempts never count against your account.
 `GNUTSHELL_DEBUG_SESSION_MENU=<ms>` opens the session menu. Only drive it toward
-Log Out in tests: the other entries really suspend, restart or power off.
+Log Out in tests: the other entries really suspend, restart or power off
+(without gnome-session, once confirmed).
 
 **Isolated settings in tests:** set `XDG_CONFIG_HOME` to a temporary directory
 *before* `dbus-run-session`, not inside it. Otherwise the private bus starts
@@ -236,6 +244,7 @@ All mutter options work (`--help`).
 | `src/pam.rs` | PAM password check on a worker thread |
 | `src/workspaces.rs` | Workspace indicator, switch animation, dynamic workspaces |
 | `src/session.rs` | Panel power button, session menu, logind actions |
+| `src/session/end_session.rs` | gnome-session's end-session dialog |
 | `src/icons.rs` | Icon theme lookup, SVG/PNG loading, window-to-app matching |
 | `src/ui.rs` | Shared colors, keysyms, Clutter helpers |
 | `src/ffi.rs` | Hand-written FFI for the libmutter / Clutter / Cogl subset in use |
@@ -260,9 +269,6 @@ All mutter options work (`--help`).
 - **Notifications:** per-app notification settings,
   sounds and `org.gtk.Notifications` are not supported (GTK apps fall back to
   `org.freedesktop.Notifications`).
-- **Log Out doesn't ask apps to save first.** Under gnome-session it requests
-  a forced logout (gnutshell has no end-session dialog for inhibitors yet);
-  without gnome-session it just ends gnutshell.
 - **No keyring prompt yet.** Keyring unlock prompts come from
   gcr's system prompter, which gnome-shell normally replaces.
 - **Icons support only SVG and PNG.** XPM files are skipped, and the generic
