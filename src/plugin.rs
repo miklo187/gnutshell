@@ -175,6 +175,7 @@ mod imp {
         pub(super) session_menu: RefCell<Option<std::rc::Rc<SessionMenu>>>,
         pub(super) input_sources: RefCell<Option<std::rc::Rc<crate::keyboard::InputSources>>>,
         pub(super) notifications: RefCell<Option<std::rc::Rc<crate::notifications::Notifications>>>,
+        pub(super) status_icons: RefCell<Option<std::rc::Rc<crate::status::StatusIcons>>>,
         pub(super) screenshots: RefCell<Option<std::rc::Rc<crate::screenshot::Screenshots>>>,
         pub(super) osd: RefCell<Option<std::rc::Rc<crate::osd::Osd>>>,
         pub(super) shell_dbus: RefCell<Option<crate::shell_dbus::ShellService>>,
@@ -328,6 +329,19 @@ impl imp::GnutshellPlugin {
                 crate::keyboard::InputSources::new(display, panel, PANEL_HEIGHT as f32);
             let osd = crate::osd::Osd::new(display, stage);
             *self.shell_dbus.borrow_mut() = Some(crate::shell_dbus::ShellService::new(display, osd.clone()));
+            let weak = self.obj().downgrade();
+            *self.status_icons.borrow_mut() = Some(crate::status::StatusIcons::new(
+                display,
+                stage,
+                panel,
+                PANEL_HEIGHT as f32,
+                osd.clone(),
+                Box::new(move || {
+                    if let Some(plugin) = weak.upgrade() {
+                        plugin.imp().place_status();
+                    }
+                }),
+            ));
             *self.osd.borrow_mut() = Some(osd);
             let notifications =
                 crate::notifications::Notifications::new(display, stage, panel, clock, PANEL_HEIGHT as f32);
@@ -451,7 +465,7 @@ impl imp::GnutshellPlugin {
     /// separated by spaces: characters to type, one of `Super`, `Return`,
     /// `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` / `Alt-up` (hold / release Alt),
     /// a raw keysym `0x…` (tap), `down:0x…` / `up:0x…` (hold / release),
-    /// `move:X,Y` (pointer), `click`, `press` / `release` (primary button), `wheel-up` / `wheel-down`,
+    /// `move:X,Y` (pointer), `click`, `middle-click`, `press` / `release` (primary button), `wheel-up` / `wheel-down`,
     /// or `_` to pause one step. Drives the real
     /// input path headless.
     #[cfg(debug_assertions)]
@@ -466,6 +480,7 @@ impl imp::GnutshellPlugin {
             Wheel(i32), // ClutterScrollDirection
             Click,
             Button(bool),
+            MiddleClick,
         }
         use Input::*;
         let hex = |t: &str| u32::from_str_radix(t, 16).ok();
@@ -484,6 +499,7 @@ impl imp::GnutshellPlugin {
                 "Alt-up" => vec![Key(0xffe9, false)],
                 "click" => vec![Click],
                 "press" => vec![Button(true)],
+                "middle-click" => vec![MiddleClick],
                 "release" => vec![Button(false)],
                 "wheel-up" => vec![Wheel(ffi::CLUTTER_SCROLL_UP)],
                 "wheel-down" => vec![Wheel(ffi::CLUTTER_SCROLL_DOWN)],
@@ -533,6 +549,11 @@ impl imp::GnutshellPlugin {
                                 const PRIMARY: u32 = 1; // CLUTTER_BUTTON_PRIMARY
                                 for state in [1, 0] { // pressed, released
                                     ffi::clutter_virtual_input_device_notify_button(ptr, now, PRIMARY, state);
+                                }
+                            }
+                            MiddleClick => {
+                                for state in [1, 0] {
+                                    ffi::clutter_virtual_input_device_notify_button(ptr, now, 2, state);
                                 }
                             }
                             Button(pressed) => {
@@ -670,6 +691,28 @@ impl imp::GnutshellPlugin {
         }
     }
 
+    /// The status icons end at the power button, and the keyboard layout
+    /// indicator ends where they start.
+    fn place_status_in(&self, panel_width: f32) {
+        let mut right_edge = panel_width - crate::session::BUTTON_SIZE - 8.0;
+        let status = self.status_icons.borrow().clone();
+        if let Some(status) = status {
+            status.place(right_edge);
+            right_edge -= status.width();
+        }
+        if let Some(sources) = self.input_sources.borrow().as_ref() {
+            sources.place(right_edge);
+        }
+    }
+
+    /// Redo that after the icons changed size.
+    fn place_status(&self) {
+        let display = self.obj().upcast_ref::<MetaPlugin>().display();
+        if let Some(geo) = crate::ui::primary_monitor_geometry(display) {
+            self.place_status_in(geo.width as f32);
+        }
+    }
+
     fn relayout(&self) {
         let shell = self.shell.borrow();
         let Some(shell) = shell.as_ref() else { return };
@@ -702,9 +745,7 @@ impl imp::GnutshellPlugin {
             if let Some(menu) = self.session_menu.borrow().as_ref() {
                 menu.place_button(geo.width as f32);
             }
-            if let Some(sources) = self.input_sources.borrow().as_ref() {
-                sources.place(geo.width as f32 - crate::session::BUTTON_SIZE - 8.0);
-            }
+            self.place_status_in(geo.width as f32);
             if let Some(lock) = self.lock_screen.borrow().as_ref() {
                 lock.relayout();
             }
@@ -766,6 +807,9 @@ impl imp::GnutshellPlugin {
         }
         if let Some(notifications) = self.notifications.borrow_mut().take() {
             notifications.destroy();
+        }
+        if let Some(status) = self.status_icons.borrow_mut().take() {
+            status.destroy();
         }
         if let Some(osd) = self.osd.borrow_mut().take() {
             osd.destroy();

@@ -70,6 +70,20 @@ pub fn primary_monitor_scale(display: *mut MetaDisplay) -> f32 {
     }
 }
 
+/// A launch context that gives the started app the right display variables
+/// and an activation token for the event being handled.
+pub fn launch_context(display: *mut MetaDisplay) -> gio::AppLaunchContext {
+    unsafe {
+        let sn = ffi::meta_display_get_startup_notification(display);
+        let ctx = ffi::meta_startup_notification_create_launcher(sn);
+        if ctx.is_null() {
+            return gio::AppLaunchContext::new();
+        }
+        ffi::meta_launch_context_set_timestamp(ctx, ffi::clutter_get_current_event_time());
+        from_glib_full(ctx as *mut gio::ffi::GAppLaunchContext)
+    }
+}
+
 /// An XDG activation token, so an app launched or signalled by the shell may
 /// take focus.
 pub fn activation_token(display: *mut MetaDisplay, timestamp: u32) -> Option<String> {

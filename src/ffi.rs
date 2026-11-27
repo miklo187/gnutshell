@@ -366,6 +366,7 @@ unsafe extern "C" {
 
     // clutter-event.h
     pub fn clutter_event_get_scroll_direction(event: *const ClutterEvent) -> c_int;
+    pub fn clutter_event_get_button(event: *const ClutterEvent) -> u32;
     pub fn clutter_event_get_scroll_delta(event: *const ClutterEvent, dx: *mut c_double, dy: *mut c_double);
     pub fn clutter_event_is_pointer_emulated(event: *const ClutterEvent) -> gboolean;
     pub fn clutter_event_get_key_symbol(event: *const ClutterEvent) -> c_uint;

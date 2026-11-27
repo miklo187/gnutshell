@@ -15,6 +15,8 @@ fn main() {
         "cairo".to_string(),
         "librsvg-2.0".to_string(),
         "libsystemd".to_string(),
+        "libpulse".to_string(),
+        "libpulse-mainloop-glib".to_string(),
     ];
 
     for name in &libs {

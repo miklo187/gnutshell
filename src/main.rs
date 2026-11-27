@@ -17,6 +17,7 @@ mod polkit;
 mod screenshot;
 mod session;
 mod shell_dbus;
+mod status;
 mod switcher;
 mod ui;
 mod workspaces;

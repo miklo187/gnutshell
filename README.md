@@ -55,6 +55,13 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
   GNOME portal and gnome-screenshot. As in gnome-shell, only the portal,
   gsd-media-keys and the owner of `org.gnome.Screenshot` may call it, and not
   while the screen is locked. The pointer is never in the picture.
+- Status icons left of the power button: network, volume and, if UPower
+  reports a battery, battery with its percentage. Scroll over the volume icon
+  to change the default output's volume in steps of 5 % (up to 100 %), and
+  middle-click it to mute. A left click on an icon opens the matching page of
+  GNOME Settings. Volume comes from libpulse (PipeWire works), network from
+  NetworkManager, battery from UPower. An icon whose service is missing is
+  hidden. There are no quick settings menus.
 - Window effects: fade/scale on map, destroy, minimize and unminimize
 - App launcher: press Super to open a search field over a dimmed screen. Type to
   filter installed apps. Scroll with the mouse wheel or touchpad; use Up/Down or Tab to select, and Enter or a click to
@@ -119,7 +126,8 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 ## Build
 
 Requires mutter 51 development files (`libmutter-51.pc`), polkit
-(`polkit-agent-1.pc`), cairo, librsvg, libsystemd and Rust. Running it as a
+(`polkit-agent-1.pc`), cairo, librsvg, libsystemd, libpulse with its GLib
+main loop (`libpulse-mainloop-glib.pc`) and Rust. Running it as a
 session needs gnome-session and gnome-settings-daemon.
 
 ```sh
@@ -175,7 +183,7 @@ Don't script wrong passwords: `pam_faillock` locks the account after 3 failures.
 **Keyboard-driven test** (debug builds only): `GNUTSHELL_DEBUG_KEYS="<ms>:<tokens>"`
 types through a virtual keyboard after `<ms>`, one token every 80 ms. Tokens are
 characters to type, `Super`, `Return`, `Escape`, `Tab`, `Up`, `Down`, `Alt+Tab`, `Alt-down` /
-`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `click`, `press` / `release`, `wheel-up` / `wheel-down`, and `_` (pause). `GNUTSHELL_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
+`Alt-up` (hold or release Alt), raw keysyms `0x…` (tap) or `down:0x…` / `up:0x…`, pointer `move:X,Y`, `click`, `middle-click`, `press` / `release`, `wheel-up` / `wheel-down`, and `_` (pause). `GNUTSHELL_DEBUG_SCREENSHOT="<ms>,...:<prefix>"`
 saves raw BGRA screenshots at those times.
 
 `GNUTSHELL_DEBUG_PAM_USER=<user>` checks lock screen passwords against another
@@ -238,6 +246,8 @@ All mutter options work (`--help`).
 | `src/notifications.rs` | `org.freedesktop.Notifications` service and banner |
 | `src/notifications/list.rs` | Notification list opened from the clock |
 | `src/screenshot.rs` | Screenshot keys, area selection, `org.gnome.Shell.Screenshot` |
+| `src/status.rs` | Panel network, volume and battery icons |
+| `src/status/audio.rs` | Default output volume through libpulse |
 | `src/osd.rs` | Volume/brightness popup |
 | `src/keyboard.rs` | Input sources: XKB keymap, layout switching, panel indicator |
 | `src/lockscreen.rs` | Lock screen, `org.gnome.ScreenSaver`, logind lock/sleep, idle |
