@@ -21,6 +21,8 @@ use std::rc::Rc;
 const MAX_HISTORY: usize = 50;
 const HEADER_HEIGHT: f32 = 32.0;
 const CLEAR_WIDTH: f32 = 90.0;
+/// The line under the entries that says how many more there are.
+const MORE_HEIGHT: f32 = 28.0;
 const CLOCK_PADDING: f32 = 14.0;
 const DOT_SIZE: f32 = 6.0;
 const HEADER_FONT: &CStr = c"Sans Bold 12";
@@ -82,6 +84,8 @@ pub struct ListState {
     offset: usize,
     /// Whether the oldest entry is on screen.
     at_end: bool,
+    /// How many entries are on screen.
+    shown: usize,
     scroll: f64,
     /// Months from the current one to the one the calendar shows.
     pub month: i32,
@@ -340,9 +344,11 @@ impl Notifications {
         // Left out where there is no room beside the list.
         let calendar_width = Some(calendar::width()).filter(|w| width + w <= geo.width as f32 - 32.0);
         let box_width = width + calendar_width.map_or(0.0, |w| w + 1.0);
-        let max_height = geo.height as f32 - self.panel_height - 2.0 * PADDING;
+        // Down to the taskbar, at most.
+        let max_height = geo.height as f32 - self.panel_height - crate::taskbar::HEIGHT as f32 - 2.0 * SPACING;
         let panel_box = self.view.panel_box;
         let mut at_end = true;
+        let mut shown = 0;
         unsafe {
             ffi::clutter_actor_destroy_all_children(panel_box);
 
@@ -372,8 +378,10 @@ impl Notifications {
                 let card = card(n, width - 2.0 * SPACING);
                 ffi::clutter_actor_add_child(panel_box, card);
                 let height = ffi::clutter_actor_get_height(card);
+                // Unless it is the last one, keep room for the line below.
+                let below = if i + 1 < entries.len() { MORE_HEIGHT + SPACING } else { 0.0 };
                 // Always show one, even on a tiny monitor.
-                if i > offset && y + height + SPACING > max_height {
+                if i > offset && y + height + SPACING + below > max_height {
                     ffi::clutter_actor_destroy(card);
                     at_end = false;
                     break;
@@ -382,6 +390,10 @@ impl Notifications {
                 // Buttons are wired once the card has a parent.
                 self.wire_card(card, n, width - 2.0 * SPACING, scale);
                 y += height + SPACING;
+                shown += 1;
+            }
+            if !at_end {
+                y = self.add_more_line(panel_box, entries.len() - offset - shown, y, width) + SPACING;
             }
 
             ffi::clutter_actor_set_position(self.view.overlay, geo.x as f32, geo.y as f32);
@@ -401,7 +413,38 @@ impl Notifications {
                 self.panel_height + SPACING,
             );
         }
-        self.state.borrow_mut().list.at_end = at_end;
+        let mut state = self.state.borrow_mut();
+        state.list.at_end = at_end;
+        state.list.shown = shown;
+    }
+
+    /// "▾ 5 more" at `y`; a click goes on to them. Returns its bottom.
+    unsafe fn add_more_line(self: &Rc<Self>, parent: *mut ClutterActor, count: usize, y: f32, width: f32) -> f32 {
+        unsafe {
+            let line = ffi::clutter_actor_new();
+            ffi::clutter_actor_set_reactive(line, 1);
+            ffi::clutter_actor_add_child(parent, line);
+            ffi::clutter_actor_set_position(line, SPACING, y);
+            let line_width = width - 2.0 * SPACING;
+            ffi::clutter_actor_set_size(line, line_width, MORE_HEIGHT);
+            let text = ui::label(ui::BODY_FONT, &format!("▾ {count} more"), &ui::HINT_COLOR);
+            ffi::clutter_actor_add_child(line, text);
+            ffi::clutter_actor_set_position(
+                text,
+                ((line_width - ffi::clutter_actor_get_width(text)) / 2.0).floor(),
+                ((MORE_HEIGHT - ffi::clutter_actor_get_height(text)) / 2.0).floor(),
+            );
+            crate::windows::hover_highlight(line, ui::TRANSPARENT, HOVER_COLOR);
+            let weak = Rc::downgrade(self);
+            gobj(line).connect_local("button-press-event", false, move |_| {
+                with(&weak, |n| {
+                    let page = n.state.borrow().list.shown.max(1);
+                    n.scroll_list(page as i32);
+                });
+                Some(true.to_value())
+            });
+            y + MORE_HEIGHT
+        }
     }
 
     /// Add the copy and remove buttons to a parented card.

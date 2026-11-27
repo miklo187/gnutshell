@@ -99,7 +99,9 @@ supplies the shell: the UI drawn with Clutter, plus window effects.
 - Notification list: click the clock. It keeps notifications whose banner
   timed out, including ones hidden by Do Not Disturb, newest first. A blue dot
   next to the clock marks unread ones. Each entry has a copy button and ✕;
-  "Clear all" empties the list. Scroll or use Up/Down; Escape or a click
+  "Clear all" empties the list. Scroll or use Up/Down; when entries do not
+  fit, a line below says how many more there are, and a click on it moves down
+  by a screenful. Escape or a click
   outside closes it. Dismissed, clicked and app-withdrawn notifications are
   not listed, nor are `transient` ones. While the list is open, new
   notifications appear in it instead of as banners. It holds up to 50 entries
