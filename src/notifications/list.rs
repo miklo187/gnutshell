@@ -30,15 +30,15 @@ const HOVER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x20)
 const DIVIDER_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0xff, 0xff, 0xff, 0x28);
 const CARD_COLOR: ffi::CoglColor = ffi::CoglColor::rgba(0x2a, 0x2a, 0x32, 0xff);
 
-/// Closed notifications, newest first.
+/// Closed notifications, the one that arrived last first.
 #[derive(Default)]
 pub struct History {
     entries: VecDeque<Notification>,
 }
 
 impl History {
-    /// Add `n` as the newest entry, replacing one with the same id. Returns
-    /// `false` for transient notifications, which are never kept.
+    /// Add `n` in its place by arrival, replacing one with the same id.
+    /// Returns `false` for transient notifications, which are never kept.
     pub fn push(&mut self, mut n: Notification) -> bool {
         self.remove(n.id);
         if n.transient {
@@ -46,7 +46,8 @@ impl History {
         }
         // The list shows no pictures, and they can be megabytes each.
         n.image = None;
-        self.entries.push_front(n);
+        let at = self.entries.iter().position(|e| e.arrival <= n.arrival).unwrap_or(self.entries.len());
+        self.entries.insert(at, n);
         self.entries.truncate(MAX_HISTORY);
         true
     }
@@ -509,6 +510,30 @@ mod tests {
         assert!(h.remove(3));
         assert!(!h.remove(3));
         assert_eq!(ids(&h), [1, 2]);
+    }
+
+    #[test]
+    fn sorts_by_arrival_however_they_get_there() {
+        let mut h = History::default();
+        // The banner queue overflows: later ones can get here first.
+        for arrival in [2, 3, 1, 4] {
+            h.push(Notification { id: arrival as u32, arrival, ..Default::default() });
+        }
+        assert_eq!(ids(&h), [4, 3, 2, 1]);
+        // An update arrives anew and moves to the top.
+        h.push(Notification { id: 2, arrival: 5, ..Default::default() });
+        assert_eq!(ids(&h), [2, 4, 3, 1]);
+    }
+
+    #[test]
+    fn a_full_list_forgets_the_oldest_arrival() {
+        let mut h = History::default();
+        for arrival in (2..=MAX_HISTORY as u64 + 1).chain([1]) {
+            h.push(Notification { id: arrival as u32, arrival, ..Default::default() });
+        }
+        assert_eq!(h.entries.len(), MAX_HISTORY);
+        assert!(!h.contains(1));
+        assert!(h.contains(2));
     }
 
     #[test]

@@ -143,6 +143,9 @@ pub struct Notification {
     pub suppress_sound: bool,
     /// Local time it arrived, as shown in the list.
     pub received: String,
+    /// Counts arrivals, updates included. The list is sorted by it, because
+    /// notifications do not reach the list in the order they came.
+    pub arrival: u64,
 }
 
 impl Notification {
@@ -222,6 +225,8 @@ struct State {
     hovered: bool,
     locked: bool,
     last_id: u32,
+    /// How many notifications have arrived.
+    arrivals: u64,
     connection: Option<gio::DBusConnection>,
     registration: Option<gio::RegistrationId>,
     owner: Option<gio::OwnerId>,
@@ -433,6 +438,11 @@ impl Notifications {
     // ------------------------------------------------------------------ queue
 
     fn add(self: &Rc<Self>, mut n: Notification) {
+        n.arrival = {
+            let mut state = self.state.borrow_mut();
+            state.arrivals += 1;
+            state.arrivals
+        };
         n.received = glib::DateTime::now_local()
             .and_then(|t| t.format("%H:%M"))
             .map(|s| s.to_string())
