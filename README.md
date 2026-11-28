@@ -168,6 +168,10 @@ Logs: `journalctl --user -u gnutshell.service -b`.
   fullscreen window only critical ones show. With Do Not Disturb
   (`org.gnome.desktop.notifications show-banners` off), other notifications are
   not shown as banners.
+- While a program that sent a notification is still on the session bus, only it
+  can replace or close it, as in gnome-shell; afterwards others can, so that a
+  second `notify-send -r` works. No program can replace or close gnutshell's own
+  notifications or show them under gnutshell's name.
 - Notification settings and sounds: the per-app switches in GNOME Settings
   work. An app that is off is neither shown nor listed, one with banners off
   only goes to the list, and critical notifications still show a banner then.
@@ -472,6 +476,12 @@ All mutter options work (`--help`).
   so that their services hold those names. While such a service is not
   running, another program of yours could take its name. Programs you run
   outside a sandbox should be ones you trust.
+- **Notifications don't prove who sent them.** A program states its own app name,
+  desktop entry and urgency, and gnutshell believes it (except for its own
+  name, and look-alike letters are not detected). So a program can pose as
+  another, get past that app's notification switches by using a different name,
+  or mark itself critical to show through Do Not Disturb. gnome-shell first
+  tries to tell the app from the sending process; gnutshell does not.
 - **libmutter has no stable ABI.** The soname changes with every GNOME release
   (`libmutter-51`). After a mutter upgrade, re-check `src/ffi.rs`, especially
   `MetaPluginClass`, which must match `meta/meta-plugin.h` field for field. Bump

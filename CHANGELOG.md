@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.2 (not yet released)
+
+### Security
+
+In 0.1.1 and before, any program in your session could replace or close another
+program's notification, and gnutshell's own. After a replacement, clicks on it
+went to the program that replaced it.
+
+- While a notification's sender is on the session bus, only it may replace or
+  close the notification, as in gnome-shell.
+- Programs can't replace or close gnutshell's own notifications.
+- A program that calls itself "gnutshell" is shown as "Unknown program".
+
 ## 0.1.1 (2026-11-28)
 
 ### Security

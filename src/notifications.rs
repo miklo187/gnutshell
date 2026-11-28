@@ -92,6 +92,8 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const HOVER_GRACE: Duration = Duration::from_secs(1);
 /// Between the banner or the list and the monitor's right edge.
 const RIGHT_MARGIN: f32 = 4.0;
+/// The app name of the shell's own notifications. No program may use it.
+const SHELL_NAME: &str = "gnutshell";
 /// Cap on waiting notifications, so a chatty app can't grow memory.
 const MAX_QUEUE: usize = 20;
 /// Cap on text taken from a client.
@@ -380,6 +382,11 @@ impl Notifications {
                     invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "bad Notify arguments");
                     return;
                 };
+                if replaces_id != 0 && !self.may_change(replaces_id, sender) {
+                    refuse(invocation, sender, replaces_id);
+                    return;
+                }
+                n.app_name = client_app_name(n.app_name);
                 n.sender = sender.to_owned();
                 n.id = self.assign_id(replaces_id);
                 // Reply first, so the client knows the id before any signal.
@@ -388,6 +395,10 @@ impl Notifications {
             }
             "CloseNotification" => {
                 let (id,) = params.get::<(u32,)>().unwrap_or_default();
+                if !self.may_change(id, sender) {
+                    refuse(invocation, sender, id);
+                    return;
+                }
                 invocation.return_value(None);
                 self.close(id, Reason::Closed);
             }
@@ -403,7 +414,7 @@ impl Notifications {
     pub fn notify_shell(self: &Rc<Self>, summary: &str, body: &str, icon: &str) {
         let n = Notification {
             id: self.assign_id(0),
-            app_name: "gnutshell".into(),
+            app_name: SHELL_NAME.into(),
             summary: clip(summary),
             body: clip(body),
             app_icon: icon.into(),
@@ -411,6 +422,25 @@ impl Notifications {
             ..Default::default()
         };
         self.add(n);
+    }
+
+    /// Whether the client `caller` may replace or close notification `id`.
+    fn may_change(&self, id: u32, caller: &str) -> bool {
+        let (owner, connection) = {
+            let state = self.state.borrow();
+            let owner = state
+                .current
+                .iter()
+                .chain(state.queue.waiting.iter())
+                .find(|n| n.id == id)
+                .map(|n| n.sender.clone())
+                .or_else(|| state.list.history.sender(id).map(str::to_owned));
+            (owner, state.connection.clone())
+        };
+        allows(owner.as_deref(), caller, |name| {
+            // If the bus cannot say, take the owner to be there.
+            connection.as_ref().is_none_or(|c| is_connected(c, name))
+        })
     }
 
     /// `replaces_id` if that notification is still around, else a fresh id.
@@ -945,6 +975,55 @@ fn clip(s: &str) -> String {
     s.chars().take(MAX_TEXT).collect()
 }
 
+/// gnome-shell's rule: while the program that sent a notification is on the
+/// bus, only it may replace or close it. Afterwards others may, so that one
+/// `notify-send` can update what an earlier one showed. `owner` is `None` if
+/// there is no such notification, and empty for the shell's own, which no
+/// program may touch.
+fn allows(owner: Option<&str>, caller: &str, connected: impl FnOnce(&str) -> bool) -> bool {
+    match owner {
+        None => true,
+        Some("") => false,
+        Some(owner) => owner == caller || !connected(owner),
+    }
+}
+
+fn is_connected(connection: &gio::DBusConnection, name: &str) -> bool {
+    connection
+        .call_sync(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            Some(&(name,).to_variant()),
+            Some(glib::VariantTy::new("(b)").unwrap()),
+            gio::DBusCallFlags::NONE,
+            1000,
+            gio::Cancellable::NONE,
+        )
+        .ok()
+        .and_then(|v| v.get::<(bool,)>())
+        .is_none_or(|(owned,)| owned)
+}
+
+fn refuse(invocation: gio::DBusMethodInvocation, sender: &str, id: u32) {
+    glib::g_message!("gnutshell", "{sender} may not change notification {id}");
+    invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "Invalid notification ID");
+}
+
+/// The app name to show for a program: its own claim, except that it cannot
+/// pass for the shell, also not with spaces, punctuation or invisible
+/// characters in the name. Look-alike letters are not detected.
+fn client_app_name(claimed: String) -> String {
+    let plain: String = claimed.chars().filter(char::is_ascii_alphanumeric).collect();
+    let letters_only = claimed.chars().all(|c| !c.is_alphanumeric() || c.is_ascii());
+    if letters_only && plain.eq_ignore_ascii_case(SHELL_NAME) {
+        "Unknown program".to_owned()
+    } else {
+        claimed
+    }
+}
+
 /// `Notify` arguments: `replaces_id` and the notification (no id or sender).
 fn parse_notify(params: &glib::Variant) -> Option<(u32, Notification)> {
     if params.type_().as_str() != "(susssasa{sv}i)" {
@@ -1100,6 +1179,29 @@ mod tests {
         assert_eq!(to_bgra_premultiplied(&image(3, 4, &[1, 2, 3])), None);
         assert_eq!(to_bgra_premultiplied(&image(2, 4, &[0; 8])), None);
         assert_eq!(to_bgra_premultiplied(&image(4, 2, &[0; 8])), None);
+    }
+
+    #[test]
+    fn only_the_sender_changes_a_notification_while_it_is_there() {
+        let there = |_: &str| true;
+        let gone = |_: &str| false;
+        assert!(allows(Some(":1.5"), ":1.5", there));
+        assert!(!allows(Some(":1.5"), ":1.9", there));
+        assert!(allows(Some(":1.5"), ":1.9", gone));
+        assert!(allows(None, ":1.9", there));
+        // The shell's own, whatever the bus says.
+        assert!(!allows(Some(""), ":1.9", gone));
+        assert!(!allows(Some(""), "", gone));
+    }
+
+    #[test]
+    fn programs_cannot_use_the_shells_name() {
+        for name in ["gnutshell", "GnutShell", " gnutshell ", "gnut-shell", "gnut\u{200b}shell"] {
+            assert_eq!(client_app_name(name.to_owned()), "Unknown program", "{name:?}");
+        }
+        for name in ["", "Files", "gnutshell-tweaks", "gnutshell 2", "gnutshell ü"] {
+            assert_eq!(client_app_name(name.to_owned()), name);
+        }
     }
 
     #[test]

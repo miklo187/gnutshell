@@ -62,6 +62,11 @@ impl History {
         self.entries.len() != before
     }
 
+    /// Who sent the entry `id`.
+    pub fn sender(&self, id: u32) -> Option<&str> {
+        self.entries.iter().find(|n| n.id == id).map(|n| n.sender.as_str())
+    }
+
     pub fn contains(&self, id: u32) -> bool {
         self.entries.iter().any(|n| n.id == id)
     }
